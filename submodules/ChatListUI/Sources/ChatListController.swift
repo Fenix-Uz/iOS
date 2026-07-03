@@ -38,6 +38,7 @@ import EntityKeyboard
 import TelegramStringFormatting
 import ForumCreateTopicScreen
 import AnimationUI
+import FenixuzChatLock
 import ChatTitleView
 import PeerInfoUI
 import ComponentDisplayAdapters
@@ -1929,6 +1930,11 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                         let source: ContextContentSource
                         if let location = location {
                             source = .location(ChatListContextLocationContentSource(controller: strongSelf, location: location))
+                        } else if ChatPincodeManager.shared.isLocked(peer.peerId) {
+                            // Fenixuz: locked chat — suppress the message preview on long-press so the
+                            // pincode can't be bypassed by peeking. The context menu items still work.
+                            let anchor = node.view.convert(CGPoint(x: node.bounds.width / 2.0, y: node.bounds.height / 2.0), to: nil)
+                            source = .location(ChatListContextLocationContentSource(controller: strongSelf, location: anchor))
                         } else {
                             let chatController = strongSelf.context.sharedContext.makeChatController(context: strongSelf.context, chatLocation: .peer(id: peer.peerId), subject: nil, botStart: nil, mode: .standard(.previewing), params: nil)
                             chatController.customNavigationController = strongSelf.navigationController as? NavigationController
@@ -2014,6 +2020,10 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
                 let contextContentSource: ContextContentSource
                 if peer.id.namespace == Namespaces.Peer.SecretChat, let node = node.subnodes?.first as? ContextExtractedContentContainingNode {
                     contextContentSource = .extracted(ChatListHeaderBarContextExtractedContentSource(controller: strongSelf, sourceNode: node, sourceView: nil, keepInPlace: false))
+                } else if ChatPincodeManager.shared.isLocked(peer.id) {
+                    // Fenixuz: locked chat — no message preview on long-press (privacy); menu still works.
+                    let anchor = node.view.convert(CGPoint(x: node.bounds.width / 2.0, y: node.bounds.height / 2.0), to: nil)
+                    contextContentSource = .location(ChatListContextLocationContentSource(controller: strongSelf, location: anchor))
                 } else {
                     var subject: ChatControllerSubject?
                     if case let .search(messageId) = source, let id = messageId {

@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import Display
 import TelegramPresentationData
+import LocalAuthentication
 
 // MARK: - Public mode enum
 
@@ -16,11 +17,14 @@ public enum ChatPincodeMode {
     /// `biometricEnabled` — whether to attempt Face/Touch ID on appear.
     /// `onVerify`         — returns true when the entered credential is correct.
     /// `onSuccess`        — called after a successful unlock.
+    /// `onForgot`         — optional; when non-nil a "Forgot pincode?" button is
+    ///                      shown that invokes this (master-pincode recovery).
     case verify(
         passwordType: ChatLockPasswordType,
         biometricEnabled: Bool,
         onVerify: (String) -> Bool,
-        onSuccess: () -> Void
+        onSuccess: () -> Void,
+        onForgot: (() -> Void)? = nil
     )
 
     /// Remove the lock: verify the current credential, then call onSuccess.
@@ -37,6 +41,9 @@ public final class ChatPincodeViewController: ViewController {
 
     private let mode: ChatPincodeMode
     private let presentationData: PresentationData
+    // When true this is the master-pincode recovery screen ("Forgot pincode?"), which shows a
+    // distinct title/subtitle so the user isn't faced with an identical-looking lock screen.
+    private let isMasterRecovery: Bool
 
     // -- setup-flow state --
     private var chosenType: ChatLockPasswordType = .pin   // picked by the type-picker sheet
@@ -46,6 +53,8 @@ public final class ChatPincodeViewController: ViewController {
     private var enteredCode: String = ""
     private var firstCode: String = ""       // holds the first entry during confirmation step
     private var currentStep: ChatLockSetupStep = .enterNew
+    // Wrong-entry counter (verify/master). After 4 we surface recovery — never a lockout.
+    private var failedAttempts = 0
 
     // -- UI --
     private var titleLabel: UILabel!
@@ -63,6 +72,9 @@ public final class ChatPincodeViewController: ViewController {
     // Biometric button (shown during .verify when biometrics are available & enabled)
     private var biometricButton: UIButton!
 
+    // "Forgot pincode?" button (shown only in .verify mode when an onForgot handler is supplied)
+    private var forgotButton: UIButton!
+
     // Close button (always present)
     private var closeButton: UIButton!
 
@@ -71,9 +83,10 @@ public final class ChatPincodeViewController: ViewController {
 
     // MARK: - Init
 
-    public init(mode: ChatPincodeMode, presentationData: PresentationData) {
+    public init(mode: ChatPincodeMode, presentationData: PresentationData, isMasterRecovery: Bool = false) {
         self.mode = mode
         self.presentationData = presentationData
+        self.isMasterRecovery = isMasterRecovery
 
         // Derive initial step from mode so we skip the type picker for verify/remove.
         switch mode {
@@ -82,7 +95,7 @@ public final class ChatPincodeViewController: ViewController {
             self.currentStep = .enterNew
         case .verify:
             self.setupPhase = .enterCredential
-            self.currentStep = .verify
+            self.currentStep = isMasterRecovery ? .verifyMaster : .verify
         case .remove:
             self.setupPhase = .enterCredential
             self.currentStep = .remove
@@ -90,7 +103,7 @@ public final class ChatPincodeViewController: ViewController {
 
         // For verify/remove, grab the password type from the mode payload.
         switch mode {
-        case .verify(let passwordType, _, _, _):
+        case .verify(let passwordType, _, _, _, _):
             self.chosenType = passwordType
         case .remove(let passwordType, _, _):
             self.chosenType = passwordType
@@ -173,6 +186,10 @@ public final class ChatPincodeViewController: ViewController {
         buildBiometricButton(isDark: isDark)
         view.addSubview(biometricButton)
 
+        // "Forgot pincode?" button (verify + master-recovery only)
+        buildForgotButton(isDark: isDark)
+        view.addSubview(forgotButton)
+
         // Layout constraints
         let padHeight: CGFloat = 4 * 76 + 3 * 14
 
@@ -228,7 +245,14 @@ public final class ChatPincodeViewController: ViewController {
             biometricButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             biometricButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -36),
             biometricButton.widthAnchor.constraint(equalToConstant: 60),
-            biometricButton.heightAnchor.constraint(equalToConstant: 60)
+            biometricButton.heightAnchor.constraint(equalToConstant: 60),
+
+            // "Forgot pincode?" — sits just above the biometric button. The biometric
+            // button is hidden in most verify flows, so this usually floats near the bottom.
+            forgotButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            forgotButton.bottomAnchor.constraint(equalTo: biometricButton.topAnchor, constant: -20),
+            forgotButton.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 24),
+            forgotButton.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -24)
         ])
     }
 
@@ -384,6 +408,15 @@ public final class ChatPincodeViewController: ViewController {
         biometricButton.translatesAutoresizingMaskIntoConstraints = false
     }
 
+    private func buildForgotButton(isDark: Bool) {
+        forgotButton = UIButton(type: .system)
+        forgotButton.setTitle(isMasterRecovery ? FenixuzChatLockStrings.resetButtonTitle : FenixuzChatLockStrings.forgotPincode, for: .normal)
+        forgotButton.setTitleColor(UIColor(rgb: presentationData.theme.list.itemAccentColor.rgb), for: .normal)
+        forgotButton.titleLabel?.font = .systemFont(ofSize: 16, weight: .medium)
+        forgotButton.addTarget(self, action: #selector(forgotTapped), for: .touchUpInside)
+        forgotButton.translatesAutoresizingMaskIntoConstraints = false
+    }
+
     private func buildNumberPad(isDark: Bool) -> UIView {
         let container = UIView()
         let buttonSize: CGFloat = 76
@@ -445,6 +478,11 @@ public final class ChatPincodeViewController: ViewController {
         textField.isHidden           = !isTextEntry
         submitButton.isHidden        = !isTextEntry
 
+        // "Forgot pincode?": only in verify mode when a master-recovery handler is supplied.
+        // Chat page: shown when master recovery exists. Master page: button is "Reset Chat Lock",
+        // hidden until the user has struggled (4 wrong tries), per the surface-recovery UX.
+        forgotButton.isHidden = isMasterRecovery ? (failedAttempts < 4) : (verifyOnForgot == nil)
+
         // Biometric button: only during verify/remove (never setup), when device supports it.
         let showBiometric = !isPickingType && biometricShouldShow()
         biometricButton.isHidden = !showBiometric
@@ -467,7 +505,7 @@ public final class ChatPincodeViewController: ViewController {
     /// True when the biometric button should be rendered on screen.
     private func biometricShouldShow() -> Bool {
         switch mode {
-        case .verify(_, let enabled, _, _):
+        case .verify(_, let enabled, _, _, _):
             return enabled && ChatLockBiometricHelper.availableType() != nil
         case .remove, .set:
             return false
@@ -502,7 +540,7 @@ public final class ChatPincodeViewController: ViewController {
 
     private func attemptBiometricIfNeeded() {
         // onVerify is not needed for the biometric path — bind to _ to silence the warning.
-        guard case .verify(_, let enabled, _, let onSuccess) = mode,
+        guard case .verify(_, let enabled, _, let onSuccess, _) = mode,
               enabled,
               ChatLockBiometricHelper.availableType() != nil
         else { return }
@@ -593,6 +631,80 @@ public final class ChatPincodeViewController: ViewController {
         attemptBiometricIfNeeded()
     }
 
+    // MARK: - Forgot pincode
+
+    /// The optional master-recovery handler — present only in `.verify` mode.
+    private var verifyOnForgot: (() -> Void)? {
+        if case let .verify(_, _, _, _, onForgot) = mode {
+            return onForgot
+        }
+        return nil
+    }
+
+    @objc private func forgotTapped() {
+        if isMasterRecovery {
+            resetChatLockTapped()
+        } else {
+            verifyOnForgot?()
+        }
+    }
+
+    // MARK: - Master reset (forgot the master too)
+
+    /// Escape hatch when the user has ALSO forgotten the master pincode. Chat Lock is a local
+    /// privacy gate (messages live on Telegram's servers), so a device-owner-proven reset loses
+    /// no data. Requires the device Face/Touch ID or passcode so a snooper can't just tap it.
+    private func resetChatLockTapped() {
+        let alert = UIAlertController(
+            title: FenixuzChatLockStrings.resetConfirmTitle,
+            message: FenixuzChatLockStrings.resetConfirmMessage,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: FenixuzChatLockStrings.cancel, style: .cancel))
+        alert.addAction(UIAlertAction(title: FenixuzChatLockStrings.resetConfirmAction, style: .destructive) { [weak self] _ in
+            self?.authenticateThenReset()
+        })
+        present(alert, animated: true)
+    }
+
+    private func authenticateThenReset() {
+        let proceed: () -> Void = { [weak self] in
+            guard let self else { return }
+            ChatPincodeManager.shared.disableChatLock()
+            if case let .verify(_, _, _, onSuccess, _) = self.mode {
+                self.dismissSelf { onSuccess() }
+            } else {
+                self.dismissSelf()
+            }
+        }
+        let context = LAContext()
+        var authError: NSError?
+        // deviceOwnerAuthentication = biometrics with a device-passcode fallback.
+        if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &authError) {
+            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: FenixuzChatLockStrings.resetReason) { success, _ in
+                DispatchQueue.main.async { if success { proceed() } }
+            }
+        } else {
+            // No passcode/biometrics on the device — there is no security boundary to honor.
+            proceed()
+        }
+    }
+
+    /// After 4 wrong entries we never lock the owner out — we make the recovery obvious instead.
+    private func revealRecovery() {
+        guard isMasterRecovery || verifyOnForgot != nil else { return }
+        subtitleLabel.text = FenixuzChatLockStrings.recoveryHint
+        subtitleLabel.textColor = presentationData.theme.overallDarkAppearance
+            ? UIColor(white: 1, alpha: 0.5) : UIColor(white: 0, alpha: 0.45)
+        if isMasterRecovery {
+            forgotButton.isHidden = false
+        }
+        guard !forgotButton.isHidden else { return }
+        UIView.animate(withDuration: 0.15, animations: { self.forgotButton.transform = CGAffineTransform(scaleX: 1.12, y: 1.12) }, completion: { _ in
+            UIView.animate(withDuration: 0.15) { self.forgotButton.transform = .identity }
+        })
+    }
+
     // MARK: - Core credential processing
 
     private func processCredential(_ code: String) {
@@ -601,11 +713,13 @@ public final class ChatPincodeViewController: ViewController {
         case let .set(onSuccess):
             handleSetFlow(code: code, onSuccess: onSuccess)
 
-        case let .verify(_, _, onVerify, onSuccess):
+        case let .verify(_, _, onVerify, onSuccess, _):
             if onVerify(code) {
                 dismissSelf { onSuccess() }
             } else {
+                failedAttempts += 1
                 shakeAndReset(isPasswordMode: chosenType == .text)
+                if failedAttempts >= 4 { revealRecovery() }
             }
 
         case let .remove(_, onVerify, onSuccess):
@@ -739,10 +853,17 @@ public final class ChatPincodeViewController: ViewController {
     // MARK: - Dismiss
 
     private func dismissSelf(completion: (() -> Void)? = nil) {
-        // Prevent double-calling completion if dismiss already in flight.
+        // ChatPincodeViewController inherits Display.ViewController, whose
+        // dismiss(animated:completion:) override silently drops the completion
+        // (Display/Source/ViewController.swift:575). Our enclosing controller is a
+        // plain UIKit UINavigationController, so dismiss THAT to get UIKit's real
+        // completion — otherwise onSuccess (which stores / verifies the pincode)
+        // never runs and the lock silently no-ops.
         let captured = completion
-        dismiss(animated: true) {
-            captured?()
+        if let navController = self.navigationController {
+            navController.dismiss(animated: true) { captured?() }
+        } else {
+            self.presentingViewController?.dismiss(animated: true) { captured?() }
         }
     }
 

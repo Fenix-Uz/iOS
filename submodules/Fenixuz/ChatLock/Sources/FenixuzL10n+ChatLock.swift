@@ -15,6 +15,7 @@ public enum FenixuzChatLockStrings {
         case .enterNew:    return localized(en: "Set PIN", uz: "PIN o'rnating", ru: "Установить PIN")
         case .confirmNew:  return localized(en: "Confirm PIN", uz: "PINni tasdiqlang", ru: "Подтвердите PIN")
         case .verify:      return localized(en: "Enter PIN", uz: "PIN kiriting", ru: "Введите PIN")
+        case .verifyMaster: return localized(en: "Enter master pincode", uz: "Asosiy pinkodni kiriting", ru: "Введите главный пин-код")
         case .remove:      return localized(en: "Confirm PIN", uz: "PINni tasdiqlang", ru: "Подтвердите PIN")
         }
     }
@@ -24,6 +25,7 @@ public enum FenixuzChatLockStrings {
         case .enterNew:    return localized(en: "4-digit code", uz: "4 raqamli kod", ru: "4-значный код")
         case .confirmNew:  return localized(en: "Re-enter the same code", uz: "Kodni qayta kiriting", ru: "Введите код ещё раз")
         case .verify:      return localized(en: "Chat is locked", uz: "Chat qulflangan", ru: "Чат заблокирован")
+        case .verifyMaster: return localized(en: "Unlocks this chat and removes its pincode", uz: "Chatni ochadi va pinkodini o'chiradi", ru: "Откроет чат и удалит его пин-код")
         case .remove:      return localized(en: "Enter current code to remove", uz: "O'chirish uchun amaldagi kodni kiriting", ru: "Введите текущий код для удаления")
         }
     }
@@ -33,6 +35,7 @@ public enum FenixuzChatLockStrings {
         case .enterNew:    return localized(en: "Set Password", uz: "Parol o'rnating", ru: "Установить пароль")
         case .confirmNew:  return localized(en: "Confirm Password", uz: "Parolni tasdiqlang", ru: "Подтвердите пароль")
         case .verify:      return localized(en: "Enter Password", uz: "Parol kiriting", ru: "Введите пароль")
+        case .verifyMaster: return localized(en: "Enter master password", uz: "Asosiy parolni kiriting", ru: "Введите главный пароль")
         case .remove:      return localized(en: "Confirm Password", uz: "Parolni tasdiqlang", ru: "Подтвердите пароль")
         }
     }
@@ -42,6 +45,7 @@ public enum FenixuzChatLockStrings {
         case .enterNew:    return localized(en: "Alphanumeric password", uz: "Harfli-raqamli parol", ru: "Буквенно-цифровой пароль")
         case .confirmNew:  return localized(en: "Re-enter the same password", uz: "Parolni qayta kiriting", ru: "Введите пароль ещё раз")
         case .verify:      return localized(en: "Chat is locked", uz: "Chat qulflangan", ru: "Чат заблокирован")
+        case .verifyMaster: return localized(en: "Unlocks this chat and removes its pincode", uz: "Chatni ochadi va pinkodini o'chiradi", ru: "Откроет чат и удалит его пин-код")
         case .remove:      return localized(en: "Enter current password to remove", uz: "O'chirish uchun amaldagi parolni kiriting", ru: "Введите текущий пароль для удаления")
         }
     }
@@ -117,12 +121,42 @@ public enum FenixuzChatLockStrings {
         localized(en: "Done", uz: "Tayyor", ru: "Готово")
     }
 
+    // MARK: - Forgot pincode (master-pincode recovery)
+
+    static var forgotPincode: String {
+        localized(en: "Forgot pincode?", uz: "Pinkodni unutdingizmi?", ru: "Забыли пин-код?")
+    }
+
     // MARK: - Context-menu titles (localized — fixes the previously hardcoded Uzbek)
     public static var menuSet: String {
         localized(en: "🔒 Set Pincode", uz: "🔒 Pincode qo'yish", ru: "🔒 Установить пин-код")
     }
     public static var menuRemove: String {
         localized(en: "🔓 Remove Pincode", uz: "🔓 Pincode o'chirish", ru: "🔓 Удалить пин-код")
+    }
+
+    // MARK: - Master reset (device-owner recovery when the master pincode itself is forgotten)
+
+    static var resetButtonTitle: String {
+        localized(en: "Reset Chat Lock", uz: "Chat Lock'ni reset qilish", ru: "Сбросить Chat Lock")
+    }
+    static var resetConfirmTitle: String {
+        localized(en: "Reset Chat Lock?", uz: "Chat Lock reset qilinsinmi?", ru: "Сбросить Chat Lock?")
+    }
+    static var resetConfirmMessage: String {
+        localized(en: "This removes the master pincode and unlocks every chat. Your messages are not deleted.", uz: "Bu asosiy pinkodni o'chiradi va barcha chatlarni ochadi. Xabarlaringiz o'chmaydi.", ru: "Это удалит главный пин-код и разблокирует все чаты. Сообщения не удаляются.")
+    }
+    static var resetConfirmAction: String {
+        localized(en: "Reset", uz: "Reset", ru: "Сбросить")
+    }
+    static var cancel: String {
+        localized(en: "Cancel", uz: "Bekor qilish", ru: "Отмена")
+    }
+    static var resetReason: String {
+        localized(en: "Confirm your identity to reset Chat Lock", uz: "Chat Lock'ni reset qilish uchun shaxsingizni tasdiqlang", ru: "Подтвердите личность для сброса Chat Lock")
+    }
+    static var recoveryHint: String {
+        localized(en: "Forgot it? Use the option below.", uz: "Unutdingizmi? Pastdagi variantdan foydalaning.", ru: "Забыли? Используйте вариант ниже.")
     }
 
     // MARK: - Helpers
@@ -142,6 +176,7 @@ enum ChatLockSetupStep {
     case enterNew
     case confirmNew
     case verify
+    case verifyMaster
     case remove
 }
 

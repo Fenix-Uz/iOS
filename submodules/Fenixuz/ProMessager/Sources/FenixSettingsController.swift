@@ -16,6 +16,7 @@ import ComponentFlow
 import FenixuzLocalization
 import FenixuzBrand
 import FenixuzUnreadReminder
+import FenixuzChatLock
 
 private enum FenixSection: Int32 {
     case accounts = 5
@@ -84,6 +85,8 @@ private enum FenixEntry: ItemListNodeEntry {
     case protectionHeader(String)
     case blockForeignUsers(PresentationTheme, String, String, Bool)
     case blockApkFiles(PresentationTheme, String, String, Bool)
+    // Feature #46: Chat Lock master toggle — enables per-chat lock + sets the master pincode
+    case chatLockMasterEnabled(PresentationTheme, String, String, Bool, Bool)
     case autoDownloadDisabled(PresentationTheme, String, String, Bool, Bool)
     // Feature #38: yuborishdan oldin tasdiq so'rovi (ovoz, stiker, sovg'a)
     case sendConfirmEnabled(PresentationTheme, String, String, Bool, Bool)
@@ -138,6 +141,8 @@ private enum FenixEntry: ItemListNodeEntry {
     case accountsManager(PresentationTheme, String)
     // — About FenixPro —
     case aboutRow(PresentationTheme, String)
+    // — Novagram Bots —
+    case novagramBots(PresentationTheme, String)
 
     var section: ItemListSectionId {
         switch self {
@@ -149,7 +154,7 @@ private enum FenixEntry: ItemListNodeEntry {
             return FenixSection.messaging.rawValue
         case .sttHeader, .sttEnabled, .sttLanguage, .voiceTranslate:
             return FenixSection.stt.rawValue
-        case .protectionHeader, .blockForeignUsers, .blockApkFiles, .autoDownloadDisabled, .sendConfirmEnabled, .protectionFooter:
+        case .protectionHeader, .blockForeignUsers, .blockApkFiles, .chatLockMasterEnabled, .autoDownloadDisabled, .sendConfirmEnabled, .protectionFooter:
             return FenixSection.protection.rawValue
         case .appearanceHeader, .whiteThemeAccent, .appearanceFooter:
             return FenixSection.appearance.rawValue
@@ -161,7 +166,7 @@ private enum FenixEntry: ItemListNodeEntry {
             return FenixSection.features.rawValue
         case .adsHeader, .showAds, .adsAbout:
             return FenixSection.ads.rawValue
-        case .accountsHeader, .accountsManager, .aboutRow:
+        case .accountsHeader, .accountsManager, .aboutRow, .novagramBots:
             return FenixSection.accounts.rawValue
         }
     }
@@ -203,9 +208,10 @@ private enum FenixEntry: ItemListNodeEntry {
         case .protectionHeader:          return 40
         case .blockForeignUsers:         return 41
         case .blockApkFiles:             return 42
-        case .autoDownloadDisabled:      return 43
+        case .chatLockMasterEnabled:     return 43
+        case .autoDownloadDisabled:      return 44
         case .sendConfirmEnabled:        return 45
-        case .protectionFooter:          return 44
+        case .protectionFooter:          return 46
         // Appearance (Feature #23)
         case .appearanceHeader:          return 50
         case .whiteThemeAccent:          return 51
@@ -238,6 +244,8 @@ private enum FenixEntry: ItemListNodeEntry {
         case .accountsManager:           return -1
         // About FenixPro row — at the very top, above Accounts
         case .aboutRow:                  return -3
+        // Novagram Bots row — above About FenixPro
+        case .novagramBots:              return -4
         }
     }
 
@@ -313,6 +321,8 @@ private enum FenixEntry: ItemListNodeEntry {
             if case let .blockForeignUsers(rhsTheme, rhsTitle, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle, lhsText == rhsText, lhsValue == rhsValue { return true } else { return false }
         case let .blockApkFiles(lhsTheme, lhsTitle, lhsText, lhsValue):
             if case let .blockApkFiles(rhsTheme, rhsTitle, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle, lhsText == rhsText, lhsValue == rhsValue { return true } else { return false }
+        case let .chatLockMasterEnabled(lhsTheme, lhsTitle, lhsText, lhsValue, lhsIsNew):
+            if case let .chatLockMasterEnabled(rhsTheme, rhsTitle, rhsText, rhsValue, rhsIsNew) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle, lhsText == rhsText, lhsValue == rhsValue, lhsIsNew == rhsIsNew { return true } else { return false }
         case let .autoDownloadDisabled(lhsTheme, lhsTitle, lhsText, lhsValue, lhsIsNew):
             if case let .autoDownloadDisabled(rhsTheme, rhsTitle, rhsText, rhsValue, rhsIsNew) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle, lhsText == rhsText, lhsValue == rhsValue, lhsIsNew == rhsIsNew { return true } else { return false }
         case let .sendConfirmEnabled(lhsTheme, lhsTitle, lhsText, lhsValue, lhsIsNew):
@@ -377,6 +387,8 @@ private enum FenixEntry: ItemListNodeEntry {
             if case let .accountsManager(rhsTheme, rhsTitle) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle { return true } else { return false }
         case let .aboutRow(lhsTheme, lhsTitle):
             if case let .aboutRow(rhsTheme, rhsTitle) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle { return true } else { return false }
+        case let .novagramBots(lhsTheme, lhsTitle):
+            if case let .novagramBots(rhsTheme, rhsTitle) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle { return true } else { return false }
         }
     }
 
@@ -397,6 +409,10 @@ private enum FenixEntry: ItemListNodeEntry {
         case let .aboutRow(_, title):
             return ItemListDisclosureItem(presentationData: presentationData, icon: fenixuzSettingsIcon(systemName: "info.circle.fill", color: .blue), title: title, label: "", sectionId: self.section, style: .blocks, action: {
                 arguments.openAbout()
+            })
+        case let .novagramBots(_, title):
+            return ItemListDisclosureItem(presentationData: presentationData, icon: fenixuzSettingsIcon(systemName: "bolt.circle.fill", color: .teal), title: title, label: "", sectionId: self.section, style: .blocks, action: {
+                arguments.openNovagramBots()
             })
 
         // ─── INTERFEYS ───
@@ -547,6 +563,13 @@ private enum FenixEntry: ItemListNodeEntry {
         case let .blockApkFiles(_, title, text, value):
             return ItemListSwitchItem(presentationData: presentationData, icon: fenixuzSettingsIcon(systemName: "doc.fill.badge.ellipsis", color: .red), title: title, text: text, value: value, sectionId: self.section, style: .blocks, updated: { val in
                 arguments.updateBlockApkFiles(val)
+            })
+        case let .chatLockMasterEnabled(_, title, text, value, isNew):
+            // Feature #46: Chat Lock master toggle — on turns the feature on and sets the master pincode
+            let langCode = presentationData.strings.primaryComponent.languageCode
+            let badge: AnyComponent<Empty>? = isNew ? AnyComponent(FenixNewBadgeComponent(langCode: langCode)) : nil
+            return ItemListSwitchItem(presentationData: presentationData, icon: fenixuzSettingsIcon(systemName: "lock.shield.fill", color: .blue), title: title, text: text, titleBadgeComponent: badge, value: value, sectionId: self.section, style: .blocks, updated: { val in
+                arguments.updateChatLockMaster(val)
             })
         case let .autoDownloadDisabled(_, title, text, value, isNew):
             let langCode = presentationData.strings.primaryComponent.languageCode
@@ -814,6 +837,8 @@ private struct FenixSettingsState: Equatable {
     var sttLanguage: String
     var blockForeignUsers: Bool
     var blockApkFiles: Bool
+    // Feature #46: Chat Lock master toggle — mirrors ChatPincodeManager.isMasterEnabled()
+    var chatLockMasterEnabled: Bool
     var whiteThemeAccentEnabled: Bool
     var voiceTranslateEnabled: Bool
     var autoDownloadDisabled: Bool
@@ -857,6 +882,8 @@ private struct FenixSettingsState: Equatable {
         self.sttLanguage = UserDefaults(suiteName: "pro_messager")?.string(forKey: "stt_language") ?? "en-US"
         self.blockForeignUsers = UserDefaults(suiteName: "pro_messager")?.bool(forKey: "block_foreign_users") ?? false
         self.blockApkFiles = UserDefaults(suiteName: "pro_messager")?.bool(forKey: "block_apk_files") ?? false
+        // Feature #46: read live from the keychain-backed manager (its own store, not UserDefaults)
+        self.chatLockMasterEnabled = ChatPincodeManager.shared.isMasterEnabled()
         // Default off — user opts in explicitly (light theme stays stock until they toggle it)
         self.whiteThemeAccentEnabled = UserDefaults(suiteName: "pro_messager")?.bool(forKey: "white_theme_accent_enabled") ?? false
         // Default off — voice translate is an opt-in power-user feature
@@ -926,6 +953,9 @@ private struct FenixSettingsState: Equatable {
             return false
         }
         if lhs.blockApkFiles != rhs.blockApkFiles {
+            return false
+        }
+        if lhs.chatLockMasterEnabled != rhs.chatLockMasterEnabled {
             return false
         }
         if lhs.sttEnabled != rhs.sttEnabled {
@@ -1045,6 +1075,7 @@ private func fenixSettingsEntries(presentationData: PresentationData, state: Fen
 
     // ─── ABOUT FENIXPRO ───
     entries.append(.aboutRow(presentationData.theme, l10n.about_rowTitle))
+    entries.append(.novagramBots(presentationData.theme, FenixBotsStrings.rowTitle(langCode: langCode)))
 
     // ─── ACCOUNTS (Fenixuz multi-account) ───
     entries.append(.accountsHeader(l10n.accounts_sectionHeader))
@@ -1083,7 +1114,7 @@ private func fenixSettingsEntries(presentationData: PresentationData, state: Fen
     // isNew: true — set to false here when this feature is no longer new
     let sendConfirmTitle    = FenixSendTranslateStrings.toggleTitle(langCode: langCode)
     let sendConfirmSubtitle = FenixSendTranslateStrings.toggleSubtitle(langCode: langCode)
-    entries.append(.sendTranslateConfirm(presentationData.theme, sendConfirmTitle, sendConfirmSubtitle, state.translateConfirmEnabled, true))
+    entries.append(.sendTranslateConfirm(presentationData.theme, sendConfirmTitle, sendConfirmSubtitle, state.translateConfirmEnabled, false))
 
     // Feature #30: Sticker auto-add toggle
     entries.append(.autoStickerEnabled(presentationData.theme, FenixAutoStickerStrings.toggleTitle(langCode: langCode), FenixAutoStickerStrings.toggleSubtitle(langCode: langCode), state.autoStickerEnabled))
@@ -1105,15 +1136,17 @@ private func fenixSettingsEntries(presentationData: PresentationData, state: Fen
     // isNew: hardcoded true — set to false here when this feature is no longer new.
     let voiceTranslateTitle    = FenixVoiceTranslateStrings.toggleTitle(langCode: langCode)
     let voiceTranslateSubtitle = FenixVoiceTranslateStrings.toggleSubtitle(langCode: langCode)
-    entries.append(.voiceTranslate(presentationData.theme, voiceTranslateTitle, voiceTranslateSubtitle, state.voiceTranslateEnabled, true, !state.translateConfirmEnabled))
+    entries.append(.voiceTranslate(presentationData.theme, voiceTranslateTitle, voiceTranslateSubtitle, state.voiceTranslateEnabled, false, !state.translateConfirmEnabled))
 
     // ─── PROTECTION ───
     entries.append(.protectionHeader(l10n.settings_section_protection))
     entries.append(.blockForeignUsers(presentationData.theme, l10n.settings_protection_foreign_title, l10n.settings_protection_foreign_subtitle, state.blockForeignUsers))
     entries.append(.blockApkFiles(presentationData.theme, l10n.settings_protection_apk_title, l10n.settings_protection_apk_subtitle, state.blockApkFiles))
-    entries.append(.autoDownloadDisabled(presentationData.theme, FenixAutoDownloadStrings.title(langCode: langCode), FenixAutoDownloadStrings.subtitle(langCode: langCode), state.autoDownloadDisabled, true))
+    // Feature #46: Chat Lock master toggle — value tracks the keychain-backed master pincode
+    entries.append(.chatLockMasterEnabled(presentationData.theme, FenixChatLockStrings.toggleTitle(langCode: langCode), FenixChatLockStrings.toggleSubtitle(langCode: langCode), state.chatLockMasterEnabled, true))
+    entries.append(.autoDownloadDisabled(presentationData.theme, FenixAutoDownloadStrings.title(langCode: langCode), FenixAutoDownloadStrings.subtitle(langCode: langCode), state.autoDownloadDisabled, false))
     // Feature #38: yuborishdan oldin tasdiq so'rovi toggle
-    entries.append(.sendConfirmEnabled(presentationData.theme, FenixSendConfirmStrings.toggleTitle(langCode: langCode), FenixSendConfirmStrings.toggleSubtitle(langCode: langCode), state.sendConfirmEnabled, true))
+    entries.append(.sendConfirmEnabled(presentationData.theme, FenixSendConfirmStrings.toggleTitle(langCode: langCode), FenixSendConfirmStrings.toggleSubtitle(langCode: langCode), state.sendConfirmEnabled, false))
     entries.append(.protectionFooter(presentationData.theme, l10n.settings_protection_footer))
 
     // ─── APPEARANCE (Feature #23) ───
@@ -1124,20 +1157,20 @@ private func fenixSettingsEntries(presentationData: PresentationData, state: Fen
     let accentSubtitle = FenixWhiteThemeStrings.toggleSubtitle(langCode: langCode)
     let accentFooter   = FenixWhiteThemeStrings.footer(langCode: langCode)
     entries.append(.appearanceHeader(appearanceTitle))
-    entries.append(.whiteThemeAccent(presentationData.theme, accentTitle, accentSubtitle, state.whiteThemeAccentEnabled, true))
+    entries.append(.whiteThemeAccent(presentationData.theme, accentTitle, accentSubtitle, state.whiteThemeAccentEnabled, false))
     entries.append(.appearanceFooter(presentationData.theme, accentFooter))
 
     // ─── CHAT LOCK (Feature #46) ───
     // Informational section — lock is set per-chat via long-press context menu, not via a global toggle here.
     // Local strings to avoid parallel-edit hazard on the shared Localization module.
     // isNew: hardcoded true — set to false here when this feature is no longer new.
-    entries.append(.chatLockHeader(FenixChatLockStrings.sectionTitle(langCode: langCode), true))
+    entries.append(.chatLockHeader(FenixChatLockStrings.sectionTitle(langCode: langCode), false))
     entries.append(.chatLockInfo(presentationData.theme, FenixChatLockStrings.infoBody(langCode: langCode)))
     entries.append(.chatLockFooter(presentationData.theme, FenixChatLockStrings.footer(langCode: langCode)))
 
     // ─── UNREAD MESSAGE REMINDER (Xabar eslatmasi) ───
     // isNew: hardcoded true — set to false here when this feature is no longer new.
-    entries.append(.reminderHeader(l10n.settings_reminder_sectionTitle, true))
+    entries.append(.reminderHeader(l10n.settings_reminder_sectionTitle, false))
     entries.append(.reminderEnabled(presentationData.theme, l10n.settings_reminder_enabled_title, l10n.settings_reminder_enabled_subtitle, state.reminderEnabled))
     entries.append(.reminderTime(presentationData.theme, l10n.settings_reminder_time_title, l10n.settings_reminder_minutesLabel(state.reminderMinutes)))
     entries.append(.reminderSound(presentationData.theme, l10n.settings_reminder_sound_title, l10n.settings_reminder_soundName(state.reminderSound)))
@@ -1173,6 +1206,7 @@ private func fenixSettingsEntries(presentationData: PresentationData, state: Fen
 private final class FenixSettingsArguments {
     let openAccounts: () -> Void
     let openAbout: () -> Void
+    let openNovagramBots: () -> Void
     let openCalls: () -> Void
     let updateShowDeletedMessages: (Bool) -> Void
     let updateHideFolders: (Bool) -> Void
@@ -1191,6 +1225,7 @@ private final class FenixSettingsArguments {
     let openSttLanguageSettings: () -> Void
     let updateBlockForeignUsers: (Bool) -> Void
     let updateBlockApkFiles: (Bool) -> Void
+    let updateChatLockMaster: (Bool) -> Void
     let updateWhiteThemeAccent: (Bool) -> Void
     let updateVoiceTranslate: (Bool) -> Void
     let updateAutoDownloadDisabled: (Bool) -> Void
@@ -1211,9 +1246,10 @@ private final class FenixSettingsArguments {
     // Ads section (Feature #6 — hidden Easter-egg)
     let updateShowAds: (Bool) -> Void
 
-    init(openAccounts: @escaping () -> Void, openAbout: @escaping () -> Void, openCalls: @escaping () -> Void, updateShowDeletedMessages: @escaping (Bool) -> Void, updateHideFolders: @escaping (Bool) -> Void, updateShowStories: @escaping (Bool) -> Void, updateShowMutualContactSymbol: @escaping (Bool) -> Void, updateShowGhostMode: @escaping (Bool) -> Void, updateShowViewFirstMessage: @escaping (Bool) -> Void, updateLongPressCameraSelection: @escaping (Bool) -> Void, updateEditedHistoryEnabled: @escaping (Bool) -> Void, updateTranslateMessages: @escaping (Bool) -> Void, openTranslationSettings: @escaping () -> Void, openTextStyleSettings: @escaping () -> Void, openAutoTextSettings: @escaping () -> Void, openAutoTranslateSettings: @escaping () -> Void, updateSttEnabled: @escaping (Bool) -> Void, openSttLanguageSettings: @escaping () -> Void, updateBlockForeignUsers: @escaping (Bool) -> Void, updateBlockApkFiles: @escaping (Bool) -> Void, updateWhiteThemeAccent: @escaping (Bool) -> Void, updateVoiceTranslate: @escaping (Bool) -> Void, updateAutoDownloadDisabled: @escaping (Bool) -> Void, updateSendTranslateConfirm: @escaping (Bool) -> Void, updateSendConfirmEnabled: @escaping (Bool) -> Void, updateAutoStickerEnabled: @escaping (Bool) -> Void, updateHeartEffectEnabled: @escaping (Bool) -> Void, updateReminderEnabled: @escaping (Bool) -> Void, openReminderTimeSettings: @escaping () -> Void, openReminderSoundSettings: @escaping () -> Void, addRecommendedFolders: @escaping () -> Void, openFolderStyle: @escaping () -> Void, updateChannelHistory: @escaping (Bool) -> Void, updateSettingsLinks: @escaping (Bool) -> Void, shareNovagramProLink: @escaping () -> Void, updateAutoAccept: @escaping (Bool) -> Void, updateShowAds: @escaping (Bool) -> Void) {
+    init(openAccounts: @escaping () -> Void, openAbout: @escaping () -> Void, openNovagramBots: @escaping () -> Void, openCalls: @escaping () -> Void, updateShowDeletedMessages: @escaping (Bool) -> Void, updateHideFolders: @escaping (Bool) -> Void, updateShowStories: @escaping (Bool) -> Void, updateShowMutualContactSymbol: @escaping (Bool) -> Void, updateShowGhostMode: @escaping (Bool) -> Void, updateShowViewFirstMessage: @escaping (Bool) -> Void, updateLongPressCameraSelection: @escaping (Bool) -> Void, updateEditedHistoryEnabled: @escaping (Bool) -> Void, updateTranslateMessages: @escaping (Bool) -> Void, openTranslationSettings: @escaping () -> Void, openTextStyleSettings: @escaping () -> Void, openAutoTextSettings: @escaping () -> Void, openAutoTranslateSettings: @escaping () -> Void, updateSttEnabled: @escaping (Bool) -> Void, openSttLanguageSettings: @escaping () -> Void, updateBlockForeignUsers: @escaping (Bool) -> Void, updateBlockApkFiles: @escaping (Bool) -> Void, updateChatLockMaster: @escaping (Bool) -> Void, updateWhiteThemeAccent: @escaping (Bool) -> Void, updateVoiceTranslate: @escaping (Bool) -> Void, updateAutoDownloadDisabled: @escaping (Bool) -> Void, updateSendTranslateConfirm: @escaping (Bool) -> Void, updateSendConfirmEnabled: @escaping (Bool) -> Void, updateAutoStickerEnabled: @escaping (Bool) -> Void, updateHeartEffectEnabled: @escaping (Bool) -> Void, updateReminderEnabled: @escaping (Bool) -> Void, openReminderTimeSettings: @escaping () -> Void, openReminderSoundSettings: @escaping () -> Void, addRecommendedFolders: @escaping () -> Void, openFolderStyle: @escaping () -> Void, updateChannelHistory: @escaping (Bool) -> Void, updateSettingsLinks: @escaping (Bool) -> Void, shareNovagramProLink: @escaping () -> Void, updateAutoAccept: @escaping (Bool) -> Void, updateShowAds: @escaping (Bool) -> Void) {
         self.openAccounts = openAccounts
         self.openAbout = openAbout
+        self.openNovagramBots = openNovagramBots
         self.openCalls = openCalls
         self.updateShowDeletedMessages = updateShowDeletedMessages
         self.updateHideFolders = updateHideFolders
@@ -1232,6 +1268,7 @@ private final class FenixSettingsArguments {
         self.openSttLanguageSettings = openSttLanguageSettings
         self.updateBlockForeignUsers = updateBlockForeignUsers
         self.updateBlockApkFiles = updateBlockApkFiles
+        self.updateChatLockMaster = updateChatLockMaster
         self.updateWhiteThemeAccent = updateWhiteThemeAccent
         self.updateVoiceTranslate = updateVoiceTranslate
         self.updateAutoDownloadDisabled = updateAutoDownloadDisabled
@@ -1261,11 +1298,26 @@ public func fenixSettingsController(context: AccountContext) -> ViewController {
 
     var pushControllerImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
+    // Feature #46: presents the plain-UIKit ChatPincodeViewController navVC on the app's root VC.
+    // Display's present path can't host a raw UINavigationController, so we go through the window.
+    var presentPincodeControllerImpl: ((UIViewController) -> Void)?
+
+    // Feature #46: re-read the keychain-backed master state into the toggle. Called after the
+    // set/verify modal dismisses (success OR cancel) so the switch always reflects reality.
+    let refreshChatLockMaster: () -> Void = {
+        updateState { state in
+            var state = state
+            state.chatLockMasterEnabled = ChatPincodeManager.shared.isMasterEnabled()
+            return state
+        }
+    }
 
     let arguments = FenixSettingsArguments(openAccounts: {
         pushControllerImpl?(fenixAccountsController(context: context))
     }, openAbout: {
         pushControllerImpl?(fenixAboutController(context: context))
+    }, openNovagramBots: {
+        pushControllerImpl?(fenixBotsController(context: context))
     }, openCalls: {
         pushControllerImpl?(CallListController(context: context, mode: .navigation))
     }, updateShowDeletedMessages: { value in
@@ -1406,6 +1458,42 @@ public func fenixSettingsController(context: AccountContext) -> ViewController {
             state.blockApkFiles = value
             return state
         }
+    }, updateChatLockMaster: { value in
+        // Feature #46: Chat Lock master toggle.
+        // Optimistically reflect the user's intent so the switch animates immediately; the true
+        // state is reconciled from ChatPincodeManager after the modal dismisses (see didAppear).
+        // The optimistic value also guarantees a state change on cancel, so the deferred refresh
+        // re-renders the row and snaps the switch back.
+        updateState { state in
+            var state = state
+            state.chatLockMasterEnabled = value
+            return state
+        }
+        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+        let pincodeVC: ChatPincodeViewController
+        if value {
+            // Turning ON — set a master pincode.
+            pincodeVC = ChatPincodeViewController(mode: .set(onSuccess: { code, type, bio in
+                ChatPincodeManager.shared.setMasterPincode(code, type: type, biometricEnabled: bio)
+                // Reflect the real master state the instant it changes. The didAppear timer alone
+                // races the modal's dismiss completion (which is where this runs) and can read the
+                // pre-set value, leaving the switch off until the page is reopened.
+                Queue.mainQueue().async { refreshChatLockMaster() }
+            }), presentationData: presentationData)
+        } else {
+            // Turning OFF — verify the master, then wipe every lock so nothing is stranded.
+            let meta = ChatPincodeManager.shared.getMasterMetadata()
+            pincodeVC = ChatPincodeViewController(mode: .verify(passwordType: meta.passwordType, biometricEnabled: meta.biometricEnabled, onVerify: { code in
+                ChatPincodeManager.shared.verifyMaster(code)
+            }, onSuccess: {
+                ChatPincodeManager.shared.disableChatLock()
+                Queue.mainQueue().async { refreshChatLockMaster() }
+            }), presentationData: presentationData)
+        }
+        let navVC = UINavigationController(rootViewController: pincodeVC)
+        navVC.setNavigationBarHidden(true, animated: false)
+        navVC.modalPresentationStyle = .fullScreen
+        presentPincodeControllerImpl?(navVC)
     }, updateWhiteThemeAccent: { value in
         UserDefaults(suiteName: "pro_messager")?.set(value, forKey: "white_theme_accent_enabled")
         // Apply (or revert) the brand emerald accent on the light builtin themes.
@@ -1647,6 +1735,9 @@ public func fenixSettingsController(context: AccountContext) -> ViewController {
     presentControllerImpl = { [weak controller] c in
         controller?.present(c, in: .window(.root))
     }
+    presentPincodeControllerImpl = { [weak controller] vc in
+        controller?.view.window?.rootViewController?.present(vc, animated: true)
+    }
 
     // Part C — 10-tap Easter-egg: tapping the page 10 times in quick succession reveals / hides
     // the Ads section (mirrors Telegram's own debugTapCounter unlock). A long-press was tried
@@ -1656,7 +1747,14 @@ public func fenixSettingsController(context: AccountContext) -> ViewController {
     // fires alongside the list and never blocks normal row/toggle taps. The view retains the
     // recognizer, the recognizer retains the closure — lifetime is guaranteed.
     controller.didAppear = { [weak controller] firstTime in
-        guard firstTime, let controller else { return }
+        guard let controller else { return }
+        // Feature #46: after the Chat Lock set/verify modal dismisses (success OR cancel) the
+        // settings screen re-appears — reconcile the toggle to the real master state. Deferred so
+        // a successful set/disable (which runs in the modal's dismiss completion) lands first.
+        Queue.mainQueue().after(0.3, {
+            refreshChatLockMaster()
+        })
+        guard firstTime else { return }
         let gr = FenixAdsRevealGestureRecognizer(onReveal: { [weak controller] in
             guard let controller else { return }
             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
@@ -1809,6 +1907,23 @@ private enum FenixChatLockStrings {
         case "uz": return "Chat qulfi"
         case "ru": return "Блокировка чата"
         default:   return "Chat Lock"
+        }
+    }
+
+    // Master toggle row (Protection section, Feature #46).
+    static func toggleTitle(langCode: String) -> String {
+        switch langCode {
+        case "uz": return "Chat qulfi"
+        case "ru": return "Блокировка чата"
+        default:   return "Chat Lock"
+        }
+    }
+
+    static func toggleSubtitle(langCode: String) -> String {
+        switch langCode {
+        case "uz": return "Asosiy pinkod o'rnating, so'ng chatlarni long-press menyusidan qulflang."
+        case "ru": return "Установите главный пин-код, затем блокируйте отдельные чаты из меню по долгому нажатию."
+        default:   return "Set a master pincode, then lock individual chats from their long-press menu."
         }
     }
 

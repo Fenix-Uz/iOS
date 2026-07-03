@@ -27,6 +27,7 @@ swift_library(
         "//submodules/Fenixuz/Localization:FenixuzLocalization",
         "//submodules/Fenixuz/Brand:FenixuzBrand",
         "//submodules/Fenixuz/UnreadReminder:FenixuzUnreadReminder",
+        "//submodules/Fenixuz/ChatLock:FenixuzChatLock",
     ],
     visibility = [
         "//visibility:public",

@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import CryptoKit
 import Postbox
 
 // Keychain service identifier — picks up our own bundle's namespace so
@@ -13,6 +14,15 @@ private let metadataService = "uz.fenixuz.app.ChatLock.meta"
 // Legacy UserDefaults location — only read once at startup, then deleted.
 private let legacyDefaultsKey = "chat_pincode_map"
 private let legacyMigrationDoneKey = "chat_pincode_migration_done"
+
+// Fallback store (UserDefaults) — engaged only when the keychain rejects writes in the
+// current build. Fake-codesigned dev/simulator builds carry no keychain entitlements
+// (no application-identifier / keychain-access-groups), so securityd fails every SecItem
+// call with errSecMissingEntitlement (-34018) and the lock silently never engages.
+// The credential is stored as a salted SHA-256 hash here — never plaintext.
+private let fallbackSaltKey = "fenixuz_chatlock_fb_salt"
+private let fallbackPasswordKeyPrefix = "fenixuz_chatlock_fb_pw_"
+private let fallbackMetadataKeyPrefix = "fenixuz_chatlock_fb_meta_"
 
 // MARK: - Password type
 
@@ -76,18 +86,25 @@ public final class ChatPincodeManager {
         let key = self.account(for: peerId)
         self.deletePassword(account: key)
         self.deleteMetadata(account: key)
+        self.deleteFallbackPassword(account: key)
+        self.deleteFallbackMetadata(account: key)
     }
 
     public func isLocked(_ peerId: PeerId) -> Bool {
-        return self.readPassword(account: self.account(for: peerId)) != nil
+        let key = self.account(for: peerId)
+        return self.readPassword(account: key) != nil || self.readFallbackPasswordHash(account: key) != nil
     }
 
     public func verify(_ code: String, for peerId: PeerId) -> Bool {
-        guard let stored = self.readPassword(account: self.account(for: peerId)) else {
-            return false
+        let key = self.account(for: peerId)
+        if let stored = self.readPassword(account: key) {
+            // Constant-time compare to avoid timing side channels.
+            return constantTimeEquals(stored, code)
         }
-        // Constant-time compare to avoid timing side channels.
-        return constantTimeEquals(stored, code)
+        if let storedHash = self.readFallbackPasswordHash(account: key) {
+            return constantTimeEquals(storedHash, self.fallbackHash(of: code))
+        }
+        return false
     }
 
     // MARK: - Metadata API
@@ -102,6 +119,71 @@ public final class ChatPincodeManager {
         var meta = self.readMetadata(account: key) ?? .defaultLegacy
         meta.biometricEnabled = enabled
         self.writeMetadata(meta, account: key)
+    }
+
+    // MARK: - Master pincode API
+    //
+    // The "master" is one global credential that (a) gates whether the per-chat
+    // lock feature is available at all, and (b) acts as a recovery key
+    // ("Forgot pincode?") to clear a single chat's lock. It reuses the same
+    // keychain + salted-hash fallback plumbing as per-chat credentials, stored
+    // under a reserved account key that can never collide with a numeric
+    // peerId.toInt64().
+    private let masterAccount = "__fenix_master__"
+
+    /// True when a master pincode has been set (i.e. the chat-lock feature is on).
+    public func isMasterEnabled() -> Bool {
+        return self.readPassword(account: self.masterAccount) != nil
+            || self.readFallbackPasswordHash(account: self.masterAccount) != nil
+    }
+
+    /// Store the master credential together with its options.
+    public func setMasterPincode(_ code: String, type: ChatLockPasswordType = .pin, biometricEnabled: Bool = false) {
+        self.writePassword(code, account: self.masterAccount)
+        self.writeMetadata(ChatLockMetadata(passwordType: type, biometricEnabled: biometricEnabled), account: self.masterAccount)
+    }
+
+    /// Verify a candidate against the stored master credential (constant-time).
+    public func verifyMaster(_ code: String) -> Bool {
+        if let stored = self.readPassword(account: self.masterAccount) {
+            return constantTimeEquals(stored, code)
+        }
+        if let storedHash = self.readFallbackPasswordHash(account: self.masterAccount) {
+            return constantTimeEquals(storedHash, self.fallbackHash(of: code))
+        }
+        return false
+    }
+
+    /// Master credential options (password type + biometric flag).
+    public func getMasterMetadata() -> ChatLockMetadata {
+        return self.readMetadata(account: self.masterAccount) ?? .defaultLegacy
+    }
+
+    /// Remove only the master credential (leaves per-chat locks in place).
+    public func removeMaster() {
+        self.deletePassword(account: self.masterAccount)
+        self.deleteMetadata(account: self.masterAccount)
+        self.deleteFallbackPassword(account: self.masterAccount)
+        self.deleteFallbackMetadata(account: self.masterAccount)
+    }
+
+    /// Turn the whole chat-lock feature off: wipe the master AND every per-chat
+    /// credential so nothing is stranded and re-enabling later starts clean.
+    public func disableChatLock() {
+        // Keychain: drop every item under both of our services in one sweep.
+        for service in [keychainService, metadataService] {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service
+            ]
+            _ = SecItemDelete(query as CFDictionary)
+        }
+        // UserDefaults fallback: remove every per-account password/metadata key.
+        let defaults = UserDefaults.standard
+        for key in defaults.dictionaryRepresentation().keys
+        where key.hasPrefix(fallbackPasswordKeyPrefix) || key.hasPrefix(fallbackMetadataKeyPrefix) {
+            defaults.removeObject(forKey: key)
+        }
     }
 
     // MARK: - Keychain account key
@@ -143,12 +225,20 @@ public final class ChatPincodeManager {
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
         if SecItemUpdate(updateQuery as CFDictionary, updateAttributes as CFDictionary) == errSecSuccess {
+            self.deleteFallbackPassword(account: account)
             return
         }
         var addQuery = self.basePasswordQuery(account: account)
         addQuery[kSecValueData as String] = data
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        _ = SecItemAdd(addQuery as CFDictionary, nil)
+        if SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess {
+            self.deleteFallbackPassword(account: account)
+        } else {
+            // Keychain rejected the write (dev/simulator builds get -34018
+            // errSecMissingEntitlement) — persist a salted hash instead so the
+            // lock still engages rather than silently failing open.
+            self.writeFallbackPassword(value, account: account)
+        }
     }
 
     private func deletePassword(account: String) {
@@ -172,8 +262,14 @@ public final class ChatPincodeManager {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return try? JSONDecoder().decode(ChatLockMetadata.self, from: data)
+        if status == errSecSuccess, let data = item as? Data {
+            return try? JSONDecoder().decode(ChatLockMetadata.self, from: data)
+        }
+        // Keychain miss — check the fallback store (metadata is not secret: type + flag).
+        if let data = UserDefaults.standard.data(forKey: fallbackMetadataKeyPrefix + account) {
+            return try? JSONDecoder().decode(ChatLockMetadata.self, from: data)
+        }
+        return nil
     }
 
     private func writeMetadata(_ metadata: ChatLockMetadata, account: String) {
@@ -185,16 +281,68 @@ public final class ChatPincodeManager {
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
         if SecItemUpdate(updateQuery as CFDictionary, updateAttributes as CFDictionary) == errSecSuccess {
+            self.deleteFallbackMetadata(account: account)
             return
         }
         var addQuery = self.baseMetadataQuery(account: account)
         addQuery[kSecValueData as String] = data
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        _ = SecItemAdd(addQuery as CFDictionary, nil)
+        if SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess {
+            self.deleteFallbackMetadata(account: account)
+        } else {
+            // Same keychain-unavailable case as writePassword — keep type/biometric
+            // choices working on dev/simulator builds.
+            UserDefaults.standard.set(data, forKey: fallbackMetadataKeyPrefix + account)
+        }
     }
 
     private func deleteMetadata(account: String) {
         _ = SecItemDelete(self.baseMetadataQuery(account: account) as CFDictionary)
+    }
+
+    // MARK: - UserDefaults fallback (keychain-unavailable builds)
+
+    private let saltLock = NSLock()
+
+    /// Per-install random salt for the fallback hash. Created lazily on first use.
+    private func fallbackSalt() -> String {
+        self.saltLock.lock()
+        defer { self.saltLock.unlock() }
+
+        let defaults = UserDefaults.standard
+        if let existing = defaults.string(forKey: fallbackSaltKey) {
+            return existing
+        }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) != errSecSuccess {
+            for i in 0..<bytes.count {
+                bytes[i] = UInt8.random(in: .min ... .max)
+            }
+        }
+        let salt = Data(bytes).base64EncodedString()
+        defaults.set(salt, forKey: fallbackSaltKey)
+        return salt
+    }
+
+    private func fallbackHash(of code: String) -> String {
+        let payload = Data((self.fallbackSalt() + code).utf8)
+        return SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func writeFallbackPassword(_ value: String, account: String) {
+        UserDefaults.standard.set(self.fallbackHash(of: value), forKey: fallbackPasswordKeyPrefix + account)
+    }
+
+    private func readFallbackPasswordHash(account: String) -> String? {
+        return UserDefaults.standard.string(forKey: fallbackPasswordKeyPrefix + account)
+    }
+
+    private func deleteFallbackPassword(account: String) {
+        UserDefaults.standard.removeObject(forKey: fallbackPasswordKeyPrefix + account)
+    }
+
+    private func deleteFallbackMetadata(account: String) {
+        UserDefaults.standard.removeObject(forKey: fallbackMetadataKeyPrefix + account)
     }
 
     // MARK: - One-time legacy migration

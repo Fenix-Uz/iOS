@@ -485,7 +485,8 @@ func chatContextMenuItems(context: AccountContext, peerId: PeerId, promoInfo: Ch
                                 }
 
                                 // MARK: - Pincode lock/unlock
-                                if !isSavedMessages {
+                                // Fenixuz #46: per-chat lock item only appears once a master pincode is set.
+                                if !isSavedMessages && ChatPincodeManager.shared.isMasterEnabled() {
                                     let isLocked = ChatPincodeManager.shared.isLocked(peerId)
                                     let pincodeTitle = isLocked ? FenixuzChatLockStrings.menuRemove : FenixuzChatLockStrings.menuSet
                                     let pincodeIconName = isLocked ? "Chat/Context Menu/Unpin" : "Chat/Context Menu/Pin"

@@ -1583,6 +1583,29 @@ Reason: same API change as above — `ChatPincodeMode.verify` now requires `pass
 
 ---
 
+## 📌 2026-07-03 — Feature #46: Master Pincode (Chat Lock master toggle + "Forgot pincode?" recovery)
+
+A single global **master** pincode now gates the whole per-chat lock feature and doubles as a recovery key. It is set from **Settings → NovagramPro → Protection → "Chat Lock"** and lives entirely in `FenixuzChatLock` (`ChatPincodeManager` master API: `isMasterEnabled()`, `setMasterPincode(_:type:biometricEnabled:)`, `verifyMaster(_:)`, `getMasterMetadata()`, `removeMaster()`, `disableChatLock()`; stored under the reserved keychain / UserDefaults-fallback account `__fenix_master__`, which cannot collide with a numeric `peerId.toInt64()`). Two upstream hooks below; everything else is inside Fenixuz modules.
+
+### `submodules/ChatListUI/Sources/ChatContextMenus.swift` — gate the per-chat lock item behind the master (#46) — 2026-07-03
+
+The per-chat "Set / Remove Pincode" context-menu item (the `if !isSavedMessages {` block right after the `// MARK: - Pincode lock/unlock` comment, ~line 488) is now additionally gated by the master:
+
+```swift
+// Fenixuz #46: per-chat lock item only appears once a master pincode is set.
+if !isSavedMessages && ChatPincodeManager.shared.isMasterEnabled() {
+```
+
+Reason: per spec the per-chat "Set Pincode" action must only appear once a master pincode has been configured. `ChatPincodeManager.shared.isMasterEnabled()` is the single source of truth. Applied via Python (not Edit) to keep the upstream diff minimal.
+
+### `submodules/TelegramUI/Sources/NavigateToChatController.swift` — "Forgot pincode?" master recovery in the verify gate (#46) — 2026-07-03
+
+The `.verify` gate that intercepts navigation to a locked chat (~line 40) now passes `onForgot:` (a closure only when `ChatPincodeManager.shared.isMasterEnabled()`, else `nil`). Tapping "Forgot pincode?" presents a SECOND `ChatPincodeViewController` in `.verify` mode against the MASTER (`getMasterMetadata()` type/biometric, `verifyMaster(_:)`). On master success it removes THIS chat's lock (`removePincode(for: targetPeerId)`), dismisses the lock UI, sets `chatPincodeBypassPeerId = targetPeerId`, re-calls `navigateToChatControllerImpl(params)`, then resets the bypass — mirroring the existing `onSuccess` bypass pattern. A `weak var weakLockNav` holds the first nav controller so the master screen can be presented on top of it without a retain cycle. The master screen is created with `ChatPincodeViewController(..., isMasterRecovery: true)` (2026-07-03) so it renders a distinct title/subtitle ("Enter master pincode" / "Unlocks this chat and removes its pincode") instead of the identical-looking "Enter PIN" / "Chat is locked" — users kept getting confused about what to type. `isMasterRecovery` is a plain init param (default `false`), NOT a `.verify` associated value, so no other call site or destructure changes.
+
+Reason: `ChatPincodeMode.verify` gained an optional `onForgot: (() -> Void)? = nil` associated value (Swift allows default values on enum associated values, so every other caller keeps compiling; the only `.verify` construction site in the whole tree is this gate). The recovery flow needs the file-private `chatPincodeBypassPeerId` and must re-enter `navigateToChatControllerImpl`, so it has to live in this upstream file. Applied via Python (not Edit) to keep the upstream diff minimal.
+
+---
+
 ## 📌 2026-06-16 (c) — folder unlock + chat-lock menu localization
 
 ### `submodules/TelegramCore/Sources/State/UserLimitsConfiguration.swift` (~line 163)
@@ -1981,3 +2004,21 @@ Reason: `chatLocation.peerId`, `context`, and `presentationInterfaceState.render
 **Implementation file:** `submodules/Fenixuz/ProMessager/Sources/FenixAutoAcceptManager.swift` (picked up automatically by the ProMessager BUILD glob — no BUILD change needed).
 
 **No new BUILD dep for TelegramUI** — `FenixuzProMessager` is already a direct dep of `TelegramUI/BUILD` (added for ApplicationContext.swift / OpenResolvedUrl.swift hooks).
+
+---
+
+## 📌 2026-07-03 — chat-lock: fix persistence + enforce lock on long-press preview
+
+Three changes fixing the per-chat pincode (it set-but-never-saved, and long-press leaked chat content).
+
+### `submodules/Fenixuz/ChatLock/Sources/ChatPincodeViewController.swift` — dismissSelf completion fix (Fenixuz module, not upstream)
+`dismissSelf(completion:)` was calling `self.dismiss(animated:completion:)`. `ChatPincodeViewController` inherits `Display.ViewController`, whose `dismiss(animated:completion:)` override **drops the completion** (`Display/Source/ViewController.swift:575`), so `onSuccess` never ran → `setPincode`/verify/remove callbacks were dead. Fixed by dismissing the enclosing **plain UIKit** `UINavigationController` (`self.navigationController`), which bypasses the Display override and fires UIKit's real completion.
+
+### `submodules/Fenixuz/ChatLock/Sources/ChatPincodeManager.swift` — keychain→UserDefaults hashed fallback (Fenixuz module, not upstream)
+Fake-codesigned dev/simulator builds carry no keychain entitlement (`application-identifier`/`keychain-access-groups` absent — only `get-task-allow`), so every `SecItem*` returns `errSecMissingEntitlement (-34018)` and writes silently failed. Keychain stays the primary store (works on properly-signed App Store builds); when it rejects a write, the credential now persists as a **salted SHA-256 hash** in `UserDefaults.standard` (never plaintext). `isLocked`/`verify`/`removePincode`/metadata read the fallback on keychain miss.
+
+### `submodules/ChatListUI/Sources/ChatListController.swift` — suppress message preview for locked chats (UPSTREAM hook)
+Long-pressing a chat builds a `mode: .standard(.previewing)` `ChatController` as the context-menu preview, which rendered the messages of a **locked** chat without asking for the pincode. Two hook sites now check `ChatPincodeManager.shared.isLocked(...)` and, when locked, use a no-content `.location(ChatListContextLocationContentSource(...))` source (menu still works, no message peek):
+- `activateChatPreview` closure (~line 1932, `else if ... isLocked(peer.peerId)`) — main chat list.
+- `peerContextAction` closure (~line 2018, `else if ... isLocked(peer.id)`) — search results.
+Also added `import FenixuzChatLock` at the top. `FenixuzChatLock` is already in `submodules/ChatListUI/BUILD` (line 13, used by ChatContextMenus.swift) — no BUILD change needed. Applied via Python (not Edit) to keep the upstream diff minimal.

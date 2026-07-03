@@ -34,6 +34,9 @@ public func navigateToChatControllerImpl(_ params: NavigateToChatControllerParam
         let isBypassed = chatPincodeBypassPeerId == targetPeerId
         if ChatPincodeManager.shared.isLocked(targetPeerId) && !isBypassed {
             let presentationData = params.context.sharedContext.currentPresentationData.with { $0 }
+            // Fenixuz #46: weak holder so the "Forgot pincode?" recovery flow can present the
+            // master verify screen on top of this lock screen without creating a retain cycle.
+            weak var weakLockNav: UINavigationController?
             let pincodeVC = ChatPincodeViewController(
                 mode: .verify(passwordType: ChatPincodeManager.shared.getMetadata(for: targetPeerId).passwordType, biometricEnabled: ChatPincodeManager.shared.getMetadata(for: targetPeerId).biometricEnabled, onVerify: { code in
                     ChatPincodeManager.shared.verify(code, for: targetPeerId)
@@ -43,12 +46,35 @@ public func navigateToChatControllerImpl(_ params: NavigateToChatControllerParam
                     navigateToChatControllerImpl(params)
                     // Clear bypass immediately after (pincode check is synchronous)
                     chatPincodeBypassPeerId = nil
-                }),
+                }, onForgot: ChatPincodeManager.shared.isMasterEnabled() ? {
+                    // Fenixuz #46: "Forgot pincode?" — verify the MASTER pincode to drop this chat's lock.
+                    let masterMeta = ChatPincodeManager.shared.getMasterMetadata()
+                    let masterVC = ChatPincodeViewController(
+                        mode: .verify(passwordType: masterMeta.passwordType, biometricEnabled: masterMeta.biometricEnabled, onVerify: { code in
+                            ChatPincodeManager.shared.verifyMaster(code)
+                        }, onSuccess: {
+                            // Master verified — recover this chat: remove its lock, dismiss the lock UI, then open it.
+                            ChatPincodeManager.shared.removePincode(for: targetPeerId)
+                            weakLockNav?.dismiss(animated: true) {
+                                chatPincodeBypassPeerId = targetPeerId
+                                navigateToChatControllerImpl(params)
+                                chatPincodeBypassPeerId = nil
+                            }
+                        }),
+                        presentationData: presentationData,
+                        isMasterRecovery: true
+                    )
+                    let masterNav = UINavigationController(rootViewController: masterVC)
+                    masterNav.setNavigationBarHidden(true, animated: false)
+                    masterNav.modalPresentationStyle = .fullScreen
+                    weakLockNav?.present(masterNav, animated: true)
+                } : nil),
                 presentationData: presentationData
             )
             let navVC = UINavigationController(rootViewController: pincodeVC)
             navVC.setNavigationBarHidden(true, animated: false)
             navVC.modalPresentationStyle = .fullScreen
+            weakLockNav = navVC
             if let topVC = params.navigationController.viewControllers.last as? ViewController {
                 topVC.present(navVC, animated: true)
             } else {
