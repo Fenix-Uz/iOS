@@ -11,6 +11,7 @@ import OverlayStatusController
 import AlertUI
 import PresentationDataUtils
 import FenixuzChatLock
+import FenixuzSecretVault
 import UndoUI
 import PremiumUI
 import TelegramPresentationData
@@ -517,6 +518,17 @@ func chatContextMenuItems(context: AccountContext, peerId: PeerId, promoInfo: Ch
                                             navVC.modalPresentationStyle = .fullScreen
                                             chatListController.view.window?.rootViewController?.present(navVC, animated: true)
                                         }
+                                    })))
+                                }
+
+                                // MARK: - Fenixuz Secret Vault: unhide (remove from vault + unmute)
+                                if !isSavedMessages && SecretVaultManager.shared.isVaulted(peerId) {
+                                    items.append(.action(ContextMenuActionItem(text: SecretVaultStrings.unhideMenu, icon: { theme in
+                                        generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Unpin"), color: theme.contextMenu.primaryColor)
+                                    }, action: { _, f in
+                                        f(.default)
+                                        SecretVaultManager.shared.removeFromVault([peerId])
+                                        let _ = context.engine.peers.updatePeerMuteSetting(peerId: peerId, threadId: nil, muteInterval: 0).startStandalone()
                                     })))
                                 }
 

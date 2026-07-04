@@ -60,6 +60,7 @@ import ChatListFilterTabContainerNode
 import HeaderPanelContainerComponent
 import HorizontalTabsComponent
 import GlobalControlPanelsContext
+import FenixuzSecretVault
 
 private final class ContextControllerContentSourceImpl: ContextControllerContentSource {
     let controller: ViewController
@@ -96,6 +97,10 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     public let context: AccountContext
     private let controlsHistoryPreload: Bool
     private let hideNetworkActivityStatus: Bool
+    // Fenixuz Secret Vault
+    fileprivate let fenixIsVaultList: Bool
+    private var fenixVaultGesturesAttached = false
+    private var fenixVaultChangedObserver: NSObjectProtocol?
     
     private let animationCache: AnimationCache
     private let animationRenderer: MultiAnimationRenderer
@@ -243,10 +248,11 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
         }
     }
     
-    public init(context: AccountContext, location: ChatListControllerLocation, controlsHistoryPreload: Bool, hideNetworkActivityStatus: Bool = false, previewing: Bool = false, enableDebugActions: Bool) {
+    public init(context: AccountContext, location: ChatListControllerLocation, controlsHistoryPreload: Bool, hideNetworkActivityStatus: Bool = false, previewing: Bool = false, enableDebugActions: Bool, fenixIsVaultList: Bool = false) {
         self.context = context
         self.controlsHistoryPreload = controlsHistoryPreload
         self.hideNetworkActivityStatus = hideNetworkActivityStatus
+        self.fenixIsVaultList = fenixIsVaultList
         
         self.location = location
         self.previewing = previewing
@@ -790,6 +796,9 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     
     deinit {
         NotificationCenter.default.removeObserver(self)
+        if let fenixVaultChangedObserver = self.fenixVaultChangedObserver {
+            NotificationCenter.default.removeObserver(fenixVaultChangedObserver)
+        }
         self.openMessageFromSearchDisposable.dispose()
         self.badgeDisposable?.dispose()
         self.badgeIconDisposable?.dispose()
@@ -2326,12 +2335,23 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
         Queue.mainQueue().after(1.0) {
             self.context.prefetchManager?.prepareNextGreetingSticker()
         }
+        
+        // Fenixuz Secret Vault: the vault screen shows only hidden chats.
+        if self.fenixIsVaultList {
+            self.chatListDisplayNode.mainContainerNode.currentItemNode.updateState { state in
+                var state = state
+                state.fenixVaultMode = true
+                return state
+            }
+        }
     }
     
     public static var sharedPreviousPowerSavingEnabled: Bool?
     
     override public func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+
+        self.fenixSetupSecretVaultIfNeeded()
                 
         if self.powerSavingMonitoringDisposable == nil {
             self.powerSavingMonitoringDisposable = (self.context.sharedContext.automaticMediaDownloadSettings
@@ -4889,6 +4909,13 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     override public func toolbarActionSelected(action: ToolbarActionOption) {
         let peerIds = self.chatListDisplayNode.effectiveContainerNode.currentItemNode.currentState.selectedPeerIds
         let threadIds = self.chatListDisplayNode.effectiveContainerNode.currentItemNode.currentState.selectedThreadIds
+        if case .extra = action {
+            if !peerIds.isEmpty {
+                self.donePressed()
+                self.fenixSetChatsVaulted(!self.fenixIsVaultList, peerIds: Array(peerIds))
+            }
+            return
+        }
         if case .left = action {
             let signal: Signal<Never, NoError>
             var completion: (() -> Void)?
@@ -6048,6 +6075,139 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
             })
         })
     }
+
+    // MARK: - Fenixuz Secret Vault
+
+    func fenixSetupSecretVaultIfNeeded() {
+        // Rebuild the entries pipeline whenever the vaulted set changes (applies to
+        // both the main list — hide/show — and the vault screen — unhide).
+        if self.fenixVaultChangedObserver == nil {
+            self.fenixVaultChangedObserver = NotificationCenter.default.addObserver(forName: .fenixSecretVaultChanged, object: nil, queue: .main) { [weak self] _ in
+                guard let self else {
+                    return
+                }
+                self.chatListDisplayNode.mainContainerNode.currentItemNode.updateState { state in
+                    var state = state
+                    state.fenixVaultRevision += 1
+                    return state
+                }
+            }
+        }
+
+        // The title entry point only lives on the main chat list.
+        guard !self.fenixIsVaultList else {
+            return
+        }
+        if !self.fenixVaultGesturesAttached, let titleView = self.findTitleView() {
+            self.fenixVaultGesturesAttached = true
+            titleView.isUserInteractionEnabled = true
+
+            let tapRecognizer = SecretVaultRevealGestureRecognizer(onReveal: { [weak self] in
+                self?.fenixOpenSecretVault()
+            })
+            titleView.addGestureRecognizer(tapRecognizer)
+
+            let longPress = UILongPressGestureRecognizer(target: self, action: #selector(self.fenixVaultLongPress(_:)))
+            titleView.addGestureRecognizer(longPress)
+        }
+    }
+
+    @objc private func fenixVaultLongPress(_ recognizer: UILongPressGestureRecognizer) {
+        if recognizer.state == .began {
+            self.fenixOpenSecretVault()
+        }
+    }
+
+    private func fenixOpenSecretVault() {
+        guard SecretVaultManager.shared.isEnabled else {
+            return
+        }
+        let metadata = ChatPincodeManager.shared.getVaultMetadata()
+        let pincodeController = ChatPincodeViewController(
+            mode: .verify(
+                passwordType: metadata.passwordType,
+                biometricEnabled: metadata.biometricEnabled,
+                onVerify: { code in
+                    return ChatPincodeManager.shared.verifyVault(code)
+                },
+                onSuccess: { [weak self] in
+                    self?.fenixPresentVaultList()
+                },
+                onForgot: { [weak self] in
+                    // Forgot the vault PIN — recover via device owner (Face ID / passcode).
+                    SecretVaultBiometric.authenticateDeviceOwner(reason: SecretVaultStrings.recoveryReason) { success in
+                        guard success, let self else {
+                            return
+                        }
+                        self.view.window?.rootViewController?.dismiss(animated: true, completion: { [weak self] in
+                            self?.fenixPresentVaultList()
+                        })
+                    }
+                }
+            ),
+            presentationData: self.presentationData
+        )
+        let navController = UINavigationController(rootViewController: pincodeController)
+        navController.setNavigationBarHidden(true, animated: false)
+        navController.modalPresentationStyle = .fullScreen
+        self.view.window?.rootViewController?.present(navController, animated: true)
+    }
+
+    private func fenixPresentVaultList() {
+        let vaultController = ChatListControllerImpl(context: self.context, location: .chatList(groupId: .root), controlsHistoryPreload: false, enableDebugActions: false, fenixIsVaultList: true)
+        vaultController.title = SecretVaultStrings.screenTitle
+        (self.navigationController as? NavigationController)?.pushViewController(vaultController)
+    }
+
+    func fenixSetChatsVaulted(_ vaulted: Bool, peerIds: [PeerId]) {
+        guard !peerIds.isEmpty else {
+            return
+        }
+        let engine = self.context.engine
+        let node = self.chatListDisplayNode.mainContainerNode.currentItemNode
+        node.setCurrentRemovingItemId(ChatListNodeState.ItemId(peerId: peerIds[0], threadId: nil))
+
+        if vaulted {
+            SecretVaultManager.shared.addToVault(peerIds)
+        } else {
+            SecretVaultManager.shared.removeFromVault(peerIds)
+        }
+        // Mute hidden chats so no push notification leaks them; unmute on unhide.
+        for peerId in peerIds {
+            let _ = engine.peers.updatePeerMuteSetting(peerId: peerId, threadId: nil, muteInterval: vaulted ? Int32.max : 0).startStandalone()
+        }
+
+        node.setCurrentRemovingItemId(nil)
+
+        let action: (UndoOverlayAction) -> Bool = { [weak self] value in
+            guard let strongSelf = self else {
+                return false
+            }
+            if value == .undo {
+                if vaulted {
+                    SecretVaultManager.shared.removeFromVault(peerIds)
+                } else {
+                    SecretVaultManager.shared.addToVault(peerIds)
+                }
+                for peerId in peerIds {
+                    let _ = strongSelf.context.engine.peers.updatePeerMuteSetting(peerId: peerId, threadId: nil, muteInterval: vaulted ? 0 : Int32.max).startStandalone()
+                }
+                return true
+            }
+            return false
+        }
+
+        self.forEachController({ controller in
+            if let controller = controller as? UndoOverlayController {
+                controller.dismissWithCommitActionAndReplacementAnimation()
+            }
+            return true
+        })
+
+        let text = vaulted ? SecretVaultStrings.movedToVault(count: peerIds.count) : SecretVaultStrings.removedFromVault(count: peerIds.count)
+        let controller = UndoOverlayController(presentationData: self.context.sharedContext.currentPresentationData.with { $0 }, content: .info(title: nil, text: text, timeout: 5.0, customUndoText: SecretVaultStrings.undo), elevatedLayout: false, animateInAsReplacement: true, action: action)
+        self.present(controller, in: .current)
+    }
     
     private func schedulePeerChatRemoval(peer: EngineRenderedPeer, type: InteractiveMessagesDeletionType, deleteGloballyIfPossible: Bool, completion: @escaping () -> Void) {
         guard let chatPeer = peer.peers[peer.peerId] else {
@@ -6995,7 +7155,8 @@ private final class ChatListLocationContext {
                             }
                         }
                     }
-                    toolbar = Toolbar(leftAction: leftAction, rightAction: ToolbarAction(title: presentationData.strings.Common_Delete, isEnabled: options.delete), middleAction: displayArchive ? ToolbarAction(title: presentationData.strings.ChatList_ArchiveAction, isEnabled: archiveEnabled) : nil)
+                    let fenixVaultExtra: ToolbarAction? = SecretVaultManager.shared.isEnabled ? ToolbarAction(title: (parentController.fenixIsVaultList ? SecretVaultStrings.removeFromVaultAction : SecretVaultStrings.hideAction), isEnabled: !peerIds.isEmpty) : nil
+                    toolbar = Toolbar(leftAction: leftAction, rightAction: ToolbarAction(title: presentationData.strings.Common_Delete, isEnabled: options.delete), middleAction: displayArchive ? ToolbarAction(title: presentationData.strings.ChatList_ArchiveAction, isEnabled: archiveEnabled) : nil, extraAction: fenixVaultExtra)
                 } else if case .forum = strongSelf.location {
                     let leftAction: ToolbarAction
                     switch options.read {

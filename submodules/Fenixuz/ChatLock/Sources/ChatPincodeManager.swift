@@ -170,6 +170,14 @@ public final class ChatPincodeManager {
     /// Turn the whole chat-lock feature off: wipe the master AND every per-chat
     /// credential so nothing is stranded and re-enabling later starts clean.
     public func disableChatLock() {
+        // The Secret Vault credential lives under the same keychain services but a
+        // separate account; it is an independent feature, so snapshot it before the
+        // service-wide sweep and put it back afterwards. Turning ChatLock off must
+        // never disable the vault.
+        let vaultPassword = self.readPassword(account: self.vaultAccount)
+        let vaultFallbackHash = vaultPassword == nil ? self.readFallbackPasswordHash(account: self.vaultAccount) : nil
+        let vaultMetadata = self.readMetadata(account: self.vaultAccount)
+
         // Keychain: drop every item under both of our services in one sweep.
         for service in [keychainService, metadataService] {
             let query: [String: Any] = [
@@ -184,6 +192,61 @@ public final class ChatPincodeManager {
         where key.hasPrefix(fallbackPasswordKeyPrefix) || key.hasPrefix(fallbackMetadataKeyPrefix) {
             defaults.removeObject(forKey: key)
         }
+
+        // Restore the vault credential if one existed before the sweep.
+        if let vaultPassword {
+            self.writePassword(vaultPassword, account: self.vaultAccount)
+        } else if let vaultFallbackHash {
+            UserDefaults.standard.set(vaultFallbackHash, forKey: fallbackPasswordKeyPrefix + self.vaultAccount)
+        }
+        if let vaultMetadata {
+            self.writeMetadata(vaultMetadata, account: self.vaultAccount)
+        }
+    }
+
+    // MARK: - Secret Vault pincode API
+    //
+    // The vault credential gates the hidden-chats "Secret Vault" feature. It is
+    // fully independent from the master / per-chat locks (its own reserved account
+    // key), but reuses the same keychain + salted-hash fallback plumbing so the
+    // Secret Vault module never has to duplicate the Security-framework code.
+    private let vaultAccount = "__fenix_vault__"
+
+    /// True when a vault pincode has been set (i.e. the Secret Vault feature is on).
+    public func isVaultEnabled() -> Bool {
+        return self.readPassword(account: self.vaultAccount) != nil
+            || self.readFallbackPasswordHash(account: self.vaultAccount) != nil
+    }
+
+    /// Store the vault credential together with its options.
+    public func setVaultPincode(_ code: String, type: ChatLockPasswordType = .pin, biometricEnabled: Bool = false) {
+        self.writePassword(code, account: self.vaultAccount)
+        self.writeMetadata(ChatLockMetadata(passwordType: type, biometricEnabled: biometricEnabled), account: self.vaultAccount)
+    }
+
+    /// Verify a candidate against the stored vault credential (constant-time).
+    public func verifyVault(_ code: String) -> Bool {
+        if let stored = self.readPassword(account: self.vaultAccount) {
+            return constantTimeEquals(stored, code)
+        }
+        if let storedHash = self.readFallbackPasswordHash(account: self.vaultAccount) {
+            return constantTimeEquals(storedHash, self.fallbackHash(of: code))
+        }
+        return false
+    }
+
+    /// Vault credential options (password type + biometric flag).
+    public func getVaultMetadata() -> ChatLockMetadata {
+        return self.readMetadata(account: self.vaultAccount) ?? .defaultLegacy
+    }
+
+    /// Remove the vault credential (turns the Secret Vault feature off). Leaves the
+    /// vaulted-peer set untouched — the caller decides whether to also clear it.
+    public func removeVault() {
+        self.deletePassword(account: self.vaultAccount)
+        self.deleteMetadata(account: self.vaultAccount)
+        self.deleteFallbackPassword(account: self.vaultAccount)
+        self.deleteFallbackMetadata(account: self.vaultAccount)
     }
 
     // MARK: - Keychain account key

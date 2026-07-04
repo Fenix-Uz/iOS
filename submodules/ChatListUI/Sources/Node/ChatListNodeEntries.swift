@@ -6,6 +6,7 @@ import TelegramPresentationData
 import MergeLists
 import AccountContext
 import FenixuzForeignUserBlock
+import FenixuzSecretVault
 
 enum ChatListNodeEntryId: Hashable {
     case Header
@@ -683,6 +684,18 @@ func chatListNodeEntriesForView(view: EngineChatList, state: ChatListNodeState, 
             continue loop
         }
         
+        // MARK: - Fenixuz Secret Vault — hide vaulted chats from the main list; the
+        // vault screen (fenixVaultMode) inverts this to show ONLY vaulted chats.
+        if let peerId = peerId {
+            if state.fenixVaultMode {
+                if !SecretVaultManager.shared.isVaulted(peerId) {
+                    continue loop
+                }
+            } else if isMainTab && SecretVaultManager.shared.isVaulted(peerId) && SecretVaultManager.shared.isEnabled {
+                continue loop
+            }
+        }
+
         // MARK: - Boshqa davlat raqamlariga cheklov (Foreign User Block) — Chat List
         let blockForeignUsersInList = UserDefaults(suiteName: "pro_messager")?.bool(forKey: "block_foreign_users") ?? false
         if blockForeignUsersInList {

@@ -105,3 +105,7 @@ fastlane/
 # App Store screenshot/privacy assets (large binaries, not source)
 screenshots/
 fenixuz-privacy-fullpage.png
+
+# NovagramProxy — paid Webshare proxy credentials, never commit (fork is public)
+submodules/Fenixuz/AutoProxy/Resources/russia_proxies.txt
+submodules/Fenixuz/AutoProxy/Resources/*_proxies.txt

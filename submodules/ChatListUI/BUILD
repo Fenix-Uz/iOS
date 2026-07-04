@@ -11,6 +11,7 @@ swift_library(
     ],
     deps = [
         "//submodules/Fenixuz/ChatLock:FenixuzChatLock",
+        "//submodules/Fenixuz/SecretVault:FenixuzSecretVault",
         "//submodules/Fenixuz/ForeignUserBlock:FenixuzForeignUserBlock",
         "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
         "//submodules/AsyncDisplayKit:AsyncDisplayKit",

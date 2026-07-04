@@ -51,6 +51,7 @@ swift_library(
         "//submodules/Fenixuz/AppleReview:FenixuzAppleReview",
         "//submodules/Fenixuz/Brand:FenixuzBrand",
         "//submodules/Fenixuz/Localization:FenixuzLocalization",
+        "//submodules/Fenixuz/AutoProxy:FenixuzAutoProxy",
     ],
     visibility = [
         "//visibility:public",

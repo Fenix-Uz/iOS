@@ -806,12 +806,60 @@ Consumers that previously checked `if product.isSubscription` or used `product.p
 | `TelegramUI/BUILD` + `AppDelegate.swift` (2026-06-27) | +1 dep, +1 import, +6-line launch hook | start FenixuzAnalytics once shared context ready (device + account counting) |
 | `PeerInfoScreen/{BUILD, PeerInfoScreen.swift, PeerInfoSettingsItems.swift, PeerInfoScreenSettingsActions.swift}` (2026-06-27) | +1 dep, +1 enum case, +2 imports, +1 row, +1 action case | "Analytics" Settings row → FenixuzAnalyticsController |
 | `Telegram/Telegram-iOS/PrivacyInfo.xcprivacy` (2026-06-27) | +1 purpose string | declare anonymous Device ID collection for Analytics (Tracking=false → no ATT) |
+| `TelegramUI/BUILD` + `AppDelegate.swift` (2026-07-04) | +1 dep, +1 import, +9-line launch hook | start FenixuzAutoProxy at launch (re-apply/self-heal NovagramProxy when the toggle is on) |
+| `AuthorizationUI/BUILD` + `AuthorizationSequencePhoneEntryController.swift` (2026-07-04) | +1 dep, +1 import, +~30 lines | login-screen "NovagramProxy" nav button — enable proxy before login in blocked countries |
 
 **Total Telegram-owned files modified: 22** (6 BUILD + 14 Swift + 1 Objective-C + 1 sqlcipher). All Fenixuz logic itself lives in:
 - `submodules/Fenixuz/AppleReview/` — demo-code fetcher + iOS alert
 - `submodules/Fenixuz/AppStoreIAP/` — Apple 3.1.1 IAP gate (May 2026 rejection fix)
 - `submodules/Fenixuz/Brand/` — central colour palette
 - `submodules/Fenixuz/ContactsConsent/` — Apple App Review 5.1.2 server-upload consent gate
+
+## 📌 NovagramProxy — opt-in auto SOCKS5 proxy (2026-07-04)
+
+User-facing brand: **NovagramProxy**. An opt-in toggle, **default OFF**. When ON, the app auto-finds
+a working SOCKS5 proxy from a bundled pool and routes this user's Telegram connection through it, so a
+user in ANY blocked country can reach Telegram without configuring a proxy by hand. The proxy host is
+never surfaced by the toggle. Three Telegram-owned hook sites, each a one-liner into the Fenixuz module:
+
+**(a) Launch** — `submodules/TelegramUI/Sources/AppDelegate.swift` + `submodules/TelegramUI/BUILD`:
+`import FenixuzAutoProxy` + a `sharedContextPromise |> take(1)` block calling
+`FenixuzAutoProxyManager.shared.start(sharedContext:)` (right after the FenixuzAnalytics block).
+`start()` no-ops unless the toggle is on; if on it re-applies / self-heals the proxy. BUILD +1 dep.
+
+**(b) Settings toggle** — `submodules/Fenixuz/ProMessager/Sources/FenixSettingsController.swift`
+(Fenixuz-owned): an "Enable NovagramProxy" `ItemListSwitchItem` in the Protection section (mirrors
+`blockForeignUsers`; key `novagram_proxy_enabled` in the `pro_messager` suite). Handler calls
+`FenixuzAutoProxyManager.shared.setEnabled(value, sharedContext: context.sharedContext)`. ProMessager
+BUILD +1 dep.
+
+**(c) Login screen** — `submodules/AuthorizationUI/Sources/AuthorizationSequencePhoneEntryController.swift`
++ `AuthorizationUI/BUILD`: `import FenixuzAutoProxy` + a left nav-bar `lock.shield` button
+(`novagramProxyPressed`) shown on first login (free left slot when there are no other accounts),
+presenting a themed alert that enables/disables via `setEnabled(!isOn, sharedContext: self.sharedContext)`.
+Essential because a blocked user cannot reach the in-app Settings BEFORE logging in. BUILD +1 dep.
+
+All logic lives in `submodules/Fenixuz/AutoProxy/`:
+- Writes shared proxy settings via `updateProxySettingsInteractively` — the running account (auth OR
+  unauth) observes the change and routes its connection through the proxy automatically. No
+  dependency on a live account/network, so it works PRE-login and stays merge-stable (only the
+  public proxy API is touched, not `SharedAccountContext` internals).
+- **Gate (Apple-safe):** the proxy is applied ONLY when the `novagram_proxy_enabled` toggle is on
+  (default OFF). A US Apple reviewer never turns it on, so the demo-account login flow is unaffected.
+- **Never overrides the user's own proxy;** turning the toggle OFF removes only our proxy.
+- **Self-heal:** a proxy we set earlier that has since died is re-checked and rotated to a live one
+  on the next launch (or when the toggle is (re)enabled).
+- `FenixuzRussiaDetector` (offline RU region / time-zone check) is retained in the module but NOT
+  used as a gate in this design — kept ready for an optional "auto-on in Russia" mode.
+- Proxy pool: bundled `Resources/russia_proxies.txt` (Webshare `host:port:user:pass`, used as
+  SOCKS5), loaded shuffled. Health is verified end-to-end by `FenixuzSocks5Probe`
+  (Network.framework: SOCKS5 username/password auth + CONNECT to a Telegram DC) BEFORE enabling;
+  `FenixuzProxyProbeSession` probes candidates in concurrent batches and enables the first live one.
+- Bundling: `apple_resource_bundle` (`FenixuzAutoProxyResources`) attached via `data =`, read with
+  `Bundle(for: FenixuzAutoProxyManager.self)` → nested `.bundle` (MetalEngine pattern).
+
+To swap the proxy list later, replace `submodules/Fenixuz/AutoProxy/Resources/russia_proxies.txt`
+(same `host:port:user:pass` format) and rebuild — no code change needed.
 
 ## 📌 Ghost mode button + Vazifalar tab (2026-06-04)
 
@@ -2022,3 +2070,68 @@ Long-pressing a chat builds a `mode: .standard(.previewing)` `ChatController` as
 - `activateChatPreview` closure (~line 1932, `else if ... isLocked(peer.peerId)`) — main chat list.
 - `peerContextAction` closure (~line 2018, `else if ... isLocked(peer.id)`) — search results.
 Also added `import FenixuzChatLock` at the top. `FenixuzChatLock` is already in `submodules/ChatListUI/BUILD` (line 13, used by ChatContextMenus.swift) — no BUILD change needed. Applied via Python (not Edit) to keep the upstream diff minimal.
+
+---
+
+## 📌 Secret Vault (hidden chats behind a separate PIN) — added 2026-07-04
+
+Feature module: `submodules/Fenixuz/SecretVault/` (`FenixuzSecretVault`) — `SecretVaultManager` (vaulted peerId set + enabled cache), `SecretVaultRevealGestureRecognizer` (10-tap title trigger), `SecretVaultStrings`. Vault PIN is stored by `ChatPincodeManager` (module `FenixuzChatLock`) under a reserved account `__fenix_vault__`, fully independent from the ChatLock master. Vaulted chats are hidden from the main list AND auto-muted (`updatePeerMuteSetting … Int32.max`) so no push leaks them; unhide/disable unmutes (`… 0`).
+
+### `submodules/Display/Source/Toolbar.swift`
+Add a 4th optional action to `Toolbar` (backward-compatible, default `nil`):
+```swift
+    public let extraAction: ToolbarAction?
+    public init(leftAction: ToolbarAction?, rightAction: ToolbarAction?, middleAction: ToolbarAction?, extraAction: ToolbarAction? = nil) {
+        …
+        self.extraAction = extraAction
+    }
+```
+Reason: the main chat-list edit toolbar has 3 slots all used (Read/Archive/Delete); the bulk "Hide to Vault" needs a 4th. Cannot live in a Fenixuz module — `Toolbar` is a Display type.
+
+### `submodules/Display/Source/ToolbarNode.swift`
+`enum ToolbarActionOption { case left; case right; case middle; case extra }` — add `case extra`.
+
+### `submodules/TabBarUI/Sources/TabBarContollerNode.swift`
+In the `GlassControlPanelComponent` toolbar (`centralItem:`), render `toolbarData.extraAction` as a SECOND grouped item next to Archive, dispatching `self.toolbarActionSelected(.extra)`. Reason: the root chat list renders its edit toolbar via the tab bar's Glass control panel; the extra action must be wired there. Reuses the existing `items:` array (no Glass-component layout change).
+
+### `submodules/ChatListUI/Sources/Node/ChatListNode.swift`
+`struct ChatListNodeState`: add `public var fenixVaultMode: Bool = false` and `public var fenixVaultRevision: Int = 0` (+ two `==` comparisons). Reason: the entries builder reads mode from `state` (already reactive through the combine); bumping `fenixVaultRevision` forces a rebuild when the vaulted set changes.
+
+### `submodules/ChatListUI/Sources/Node/ChatListNodeEntries.swift`
+`import FenixuzSecretVault`. In `chatListNodeEntriesForView`, inside `loop: for entry in view.items` (just before the Foreign User Block), after `peerId` is resolved:
+```swift
+        if let peerId = peerId {
+            if state.fenixVaultMode {
+                if !SecretVaultManager.shared.isVaulted(peerId) { continue loop }
+            } else if isMainTab && SecretVaultManager.shared.isVaulted(peerId) && SecretVaultManager.shared.isEnabled {
+                continue loop
+            }
+        }
+```
+Reason: single choke point for every main-list row; `isMainTab` guarantees archive/folders are untouched. Mirrors the ForeignUserBlock skip.
+
+### `submodules/ChatListUI/Sources/ChatListController.swift`
+- `import FenixuzChatLock`, `import FenixuzSecretVault`.
+- Stored props: `fileprivate let fenixIsVaultList: Bool`, `fenixVaultGesturesAttached`, `fenixVaultChangedObserver`.
+- `init(...)`: new trailing param `fenixIsVaultList: Bool = false` + assignment.
+- `displayNodeDidLoad()`: if `fenixIsVaultList`, set node `state.fenixVaultMode = true`.
+- `viewDidAppear`: call `fenixSetupSecretVaultIfNeeded()` (registers the `.fenixSecretVaultChanged` observer that bumps `fenixVaultRevision`; on the main list attaches the 10-tap + long-press title recognizers → PIN verify → push the vault list).
+- `deinit`: remove `fenixVaultChangedObserver`.
+- Toolbar build (`.chatList(.root)`): add `extraAction` = "Hide" (main) / "Unhide" (vault, `parentController.fenixIsVaultList`) when `SecretVaultManager.shared.isEnabled`.
+- `toolbarActionSelected`: handle `.extra` → `fenixSetChatsVaulted(!fenixIsVaultList, …)`.
+- New methods after `archiveChats`: `fenixSetupSecretVaultIfNeeded`, `fenixVaultLongPress`, `fenixOpenSecretVault`, `fenixPresentVaultList`, `fenixSetChatsVaulted` (add/remove vault + mute/unmute + Undo overlay).
+
+Reason: all require private controller state (node, toolbar, nav) — cannot be a pure Fenixuz module.
+
+### BUILD deps
+- `submodules/ChatListUI/BUILD` deps += `//submodules/Fenixuz/SecretVault:FenixuzSecretVault`.
+- `submodules/Fenixuz/ProMessager/BUILD` deps += `//submodules/Fenixuz/SecretVault:FenixuzSecretVault`.
+
+### Fenixuz-owned (not upstream) — `submodules/Fenixuz/ProMessager/Sources/FenixSettingsController.swift`
+New `FenixSection.secretVault` section: `secretVaultEnabled` toggle + `secretVaultFooter`. Toggle ON → `ChatPincodeViewController(.set)` → `setVaultPincode`; OFF → `.verify` vault → unmute+`clearVault`+`removeVault`. `refreshSecretVault` reconciles the switch in `didAppear` (mirrors Feature #46 Chat Lock master).
+
+### Secret Vault — follow-up 2026-07-04 (forgot-PIN recovery + unhide)
+
+- **`submodules/Fenixuz/SecretVault/Sources/SecretVaultBiometric.swift`** (module-owned) — `LAContext` device-owner (Face ID / passcode) auth for the "Forgot vault PIN?" path.
+- **`submodules/ChatListUI/Sources/ChatListController.swift`** — in `fenixOpenSecretVault` the verify screen's `onForgot` (was `nil`) now runs `SecretVaultBiometric.authenticateDeviceOwner` → on success dismisses the PIN modal and opens the vault. The independent vault PIN has no master, so device-owner auth is the recovery.
+- **`submodules/ChatListUI/Sources/ChatContextMenus.swift`** — `import FenixuzSecretVault`; add an "Unhide from Vault" long-press context-menu item (after the ChatLock item) shown when `SecretVaultManager.shared.isVaulted(peerId)` → `removeFromVault([peerId])` + unmute. Reason: the pushed vault list (`.chatList(.root)`, not a tab-bar child) does not render the bulk edit toolbar, so unhide is offered per-chat via long-press.

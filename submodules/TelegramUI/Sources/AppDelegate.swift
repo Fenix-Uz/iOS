@@ -3,6 +3,7 @@ import SwiftSignalKit
 import Display
 import TelegramCore
 import FenixuzAnalytics
+import FenixuzAutoProxy
 import UserNotifications
 import Intents
 import Postbox
@@ -1205,6 +1206,14 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         |> take(1)
         |> deliverOnMainQueue).start(next: { sharedApplicationContext in
             FenixuzAnalyticsManager.shared.start(sharedContext: sharedApplicationContext.sharedContext)
+        })
+
+        // Fenixuz Auto-Proxy — if the "Enable NovagramProxy" toggle is on, ensure a healthy
+        // SOCKS5 proxy from the bundled list is active so Telegram is reachable where blocked.
+        _ = (self.sharedContextPromise.get()
+        |> take(1)
+        |> deliverOnMainQueue).start(next: { sharedApplicationContext in
+            FenixuzAutoProxyManager.shared.start(sharedContext: sharedApplicationContext.sharedContext)
         })
 
         self.context.set(self.sharedContextPromise.get()

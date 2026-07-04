@@ -25,9 +25,11 @@ swift_library(
         "//submodules/AppBundle:AppBundle",
         "//submodules/ComponentFlow",
         "//submodules/Fenixuz/Localization:FenixuzLocalization",
+        "//submodules/Fenixuz/AutoProxy:FenixuzAutoProxy",
         "//submodules/Fenixuz/Brand:FenixuzBrand",
         "//submodules/Fenixuz/UnreadReminder:FenixuzUnreadReminder",
         "//submodules/Fenixuz/ChatLock:FenixuzChatLock",
+        "//submodules/Fenixuz/SecretVault:FenixuzSecretVault",
     ],
     visibility = [
         "//visibility:public",

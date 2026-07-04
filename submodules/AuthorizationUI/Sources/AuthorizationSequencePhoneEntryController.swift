@@ -14,6 +14,7 @@ import DebugSettingsUI
 import MessageUI
 import AuthenticationServices
 import FenixuzAppleReview
+import FenixuzAutoProxy
 
 public final class AuthorizationSequencePhoneEntryController: ViewController, MFMailComposeViewControllerDelegate, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
     private var controllerNode: AuthorizationSequencePhoneEntryControllerNode {
@@ -97,6 +98,12 @@ public final class AuthorizationSequencePhoneEntryController: ViewController, MF
 
         if !otherAccountPhoneNumbers.1.isEmpty {
             self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "___close", style: .plain, target: self, action: #selector(self.cancelPressed))
+        } else if let proxyImage = UIImage(systemName: "lock.shield") {
+            // Fenixuz: on first login (no other accounts) the free left slot carries a NovagramProxy
+            // entry so a user in a blocked country can enable the proxy before logging in.
+            let proxyItem = UIBarButtonItem(image: proxyImage, style: .plain, target: self, action: #selector(self.novagramProxyPressed))
+            proxyItem.accessibilityLabel = "NovagramProxy"
+            self.navigationItem.leftBarButtonItem = proxyItem
         }
 
         if let countriesConfiguration {
@@ -119,6 +126,37 @@ public final class AuthorizationSequencePhoneEntryController: ViewController, MF
     // Fenixuz: nav-bar QR icon → open the QR-login overlay.
     @objc private func qrIconPressed() {
         self.controllerNode.presentQrOverlay()
+    }
+
+    // Fenixuz: nav-bar proxy entry → let a user in a blocked country enable NovagramProxy BEFORE
+    // login (they cannot reach the in-app Settings until they are connected). Reflects on/off state.
+    @objc private func novagramProxyPressed() {
+        let langCode = self.presentationData.strings.primaryComponent.languageCode
+        let isOn = FenixuzAutoProxyManager.shared.isEnabled
+        let text: String
+        let actionTitle: String
+        switch langCode {
+        case "uz":
+            text = isOn ? "NovagramProxy yoqilgan. Telegram bloklangan hududlarda proksi orqali ulanadi." : "Telegram bloklangan bo'lsa, proksi orqali avtomatik ulanish. Yoqilsinmi?"
+            actionTitle = isOn ? "O'chirish" : "Yoqish"
+        case "ru":
+            text = isOn ? "NovagramProxy включён. Подключается через прокси там, где Telegram заблокирован." : "Автоподключение через прокси там, где Telegram заблокирован. Включить?"
+            actionTitle = isOn ? "Выключить" : "Включить"
+        default:
+            text = isOn ? "NovagramProxy is on. It connects through a proxy where Telegram is blocked." : "Automatically connect through a proxy where Telegram is blocked. Enable?"
+            actionTitle = isOn ? "Turn off" : "Enable"
+        }
+        let actions: [TextAlertAction] = [
+            TextAlertAction(type: .genericAction, title: self.presentationData.strings.Common_Cancel, action: {}),
+            TextAlertAction(type: .defaultAction, title: actionTitle, action: { [weak self] in
+                guard let self = self else {
+                    return
+                }
+                FenixuzAutoProxyManager.shared.setEnabled(!isOn, sharedContext: self.sharedContext)
+            })
+        ]
+        let alert = textAlertController(sharedContext: self.sharedContext, title: "NovagramProxy", text: text, actions: actions)
+        (self.navigationController as? NavigationController)?.presentOverlay(controller: alert, inGlobal: true, blockInteraction: true)
     }
 
     // Fenixuz: the overlay carries its own top-left back button (it covers the nav bar),
